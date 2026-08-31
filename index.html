@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mon Labyrinthe 3D 👻</title>
+    <link rel="manifest" href="manifest.json">
+    <style>
+        body {
+            background-color: #0b0b12;
+            color: #fff;
+            text-align: center;
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 10px;
+            touch-action: manipulation;
+        }
+        h1 {
+            font-size: 22px;
+            margin: 5px 0;
+            color: #ff5555;
+        }
+        canvas {
+            border: 3px solid #222;
+            background-color: #000;
+            width: 100%;
+            max-width: 600px;
+            height: auto;
+            box-shadow: 0 0 20px rgba(100, 150, 255, 0.2);
+        }
+        .controls {
+            margin-top: 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+        .button-row {
+            display: flex;
+            gap: 15px;
+        }
+        button {
+            background-color: #1a1a24;
+            color: white;
+            border: 2px solid #444;
+            padding: 15px 25px;
+            font-size: 20px;
+            cursor: pointer;
+            border-radius: 8px;
+            font-weight: bold;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        button:active {
+            background-color: #333;
+            transform: scale(0.95);
+        }
+    </style>
+</head>
+<body>
+
+    <h1>🤫Ley_bot_dy😌👌</h1>
+    
+    <!-- Canvas agrandi à 600x400 pour un meilleur confort visuel sans ralentir -->
+    <canvas id="gameCanvas" width="600" height="400"></canvas>
+
+    <div class="controls">
+        <div>
+            <button id="btnUp">⬆️</button>
+        </div>
+        <div class="button-row">
+            <button id="btnLeft">⬅️</button>
+            <button id="btnDown">⬇️</button>
+            <button id="btnRight">➡️</button>
+        </div>
+    </div>
+
+    <script>
+        const map = [
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+            [1,0,0,0,1,0,0,0,0,0,1,0,0,2,1],
+            [1,0,1,0,1,0,1,1,1,0,1,0,1,0,1],
+            [1,0,1,0,0,0,1,0,1,0,0,0,1,0,1],
+            [1,0,1,1,1,0,1,0,1,1,1,1,1,0,1],
+            [1,0,0,0,1,0,0,0,0,0,0,0,1,0,1],
+            [1,1,1,0,1,1,1,1,1,0,1,1,1,0,1],
+            [1,0,0,0,0,0,0,0,1,0,0,0,0,0,1],
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+        ];
+
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        let player = {
+            x: 1.5,
+            y: 1.5,
+            dirX: -1,
+            dirY: 0,
+            planeX: 0,
+            planeY: 0.66
+        };
+
+        // Entité unique gérant les apparitions (fantômes ou vampires terrifiants)
+        let monster = {
+            x: 13.5,
+            y: 7.5,
+            visible: false,
+            type: 'ghost', // 'ghost' ou 'vampire'
+            timer: 0
+        };
+
+        function gameLoop() {
+            // Ciel nocturne avec la pleine lune tout là-haut et sol sombre
+            ctx.fillStyle = "#05050f";
+            ctx.fillRect(0, 0, canvas.width, canvas.height / 2); // Ciel
+            
+            // Dessiner la Pleine Lune brillante 🌕
+            ctx.fillStyle = "#e6f2ff";
+            ctx.beginPath();
+            ctx.arc(canvas.width - 80, 70, 35, 0, Math.PI * 2);
+            ctx.shadowBlur = 25;
+            ctx.shadowColor = "#99ccff";
+            ctx.fill();
+            ctx.shadowBlur = 0; // Réinitialiser l'ombre pour le reste
+
+            ctx.fillStyle = "#15151a";
+            ctx.fillRect(0, canvas.height / 2, canvas.width, canvas.height / 2); // Sol
+
+            let zBuffer = [];
+
+            // 1. Raycasting pour les murs avec effet dynamique de profondeur (ombrage)
+            for (let x = 0; x < canvas.width; x++) {
+                let cameraX = 2 * x / canvas.width - 1;
+                let rayDirX = player.dirX + player.planeX * cameraX;
+                let rayDirY = player.dirY + player.planeY * cameraX;
+
+                let mapX = Math.floor(player.x);
+                let mapY = Math.floor(player.y);
+
+                let sideDistX, sideDistY;
+                let deltaDistX = Math.abs(1 / rayDirX);
+                let deltaDistY = Math.abs(1 / rayDirY);
+                let perpWallDist;
+
+                let stepX, stepY;
+                let hit = 0;
+                let side;
+
+                if (rayDirX < 0) {
+                    stepX = -1;
+                    sideDistX = (player.x - mapX) * deltaDistX;
+                } else {
+                    stepX = 1;
+                    sideDistX = (mapX + 1.0 - player.x) * deltaDistX;
+                }
+
+                if (rayDirY < 0) {
+                    stepY = -1;
+                    sideDistY = (player.y - mapY) * deltaDistY;
+                } else {
+                    stepY = 1;
+                    sideDistY = (mapY + 1.0 - player.y) * deltaDistY;
+                }
+
+                while (hit === 0) {
+                    if (sideDistX < sideDistY) {
+                        sideDistX += deltaDistX;
+                        mapX += stepX;
+                        side = 0;
+                    } else {
+                        sideDistY += deltaDistY;
+                        mapY += stepY;
+                        side = 1;
+                    }
+                    if (map[mapY][mapX] > 0) hit = 1;
+                }
+
+                if (side === 0) perpWallDist = (mapX - player.x + (1 - stepX) / 2) / rayDirX;
+                else perpWallDist = (mapY - player.y + (1 - stepY) / 2) / rayDirY;
+
+                zBuffer[x] = perpWallDist;
+
+                let lineHeight = Math.floor(canvas.height / perpWallDist);
+                let drawStart = -lineHeight / 2 + canvas.height / 2;
+                if (drawStart < 0) drawStart = 0;
+                let drawEnd = lineHeight / 2 + canvas.height / 2;
+                if (drawEnd >= canvas.height) drawEnd = canvas.height - 1;
+
+                let isExit = (map[mapY][mapX] === 2);
+                if (isExit) {
+                    ctx.strokeStyle = "#2ecc71";
+                } else {
+                    // Couleurs dynamiques selon la distance pour un effet visuel immersif
+                    let shade = Math.max(20, Math.floor(180 / (perpWallDist + 1)));
+                    ctx.strokeStyle = side === 1 ? `rgb(${shade}, ${shade}, ${shade})` : `rgb(${shade + 40}, 20, 20)`;
+                }
+
+                ctx.beginPath();
+                ctx.moveTo(x, drawStart);
+                ctx.lineTo(x, drawEnd);
+                ctx.stroke();
+            }
+
+            // 2. Affichage du Monstre (Fantôme ou Vampire terrifiant) en sursaut inoffensif
+            if (monster.visible) {
+                let spriteX = monster.x - player.x;
+                let spriteY = monster.y - player.y;
+
+                let invDet = 1.0 / (player.planeX * player.dirY - player.dirX * player.planeY);
+                let transformX = invDet * (player.dirY * spriteX - player.dirX * spriteY);
+                let transformY = invDet * (-player.planeY * spriteX + player.planeX * spriteY);
+
+                if (transformY > 0.1) {
+                    let spriteScreenX = Math.floor((canvas.width / 2) * (1 + transformX / transformY));
+                    let spriteHeight = Math.abs(Math.floor(canvas.height / transformY));
+                    let drawStartY = -spriteHeight / 2 + canvas.height / 2;
+                    if (drawStartY < 0) drawStartY = 0;
+                    let drawEndY = spriteHeight / 2 + canvas.height / 2;
+                    if (drawEndY >= canvas.height) drawEndY = canvas.height - 1;
+
+                    let spriteWidth = Math.abs(Math.floor(canvas.height / transformY));
+                    let drawStartX = -spriteWidth / 2 + spriteScreenX;
+                    let drawEndX = spriteWidth / 2 + spriteScreenX;
+
+                    if (monster.type === 'ghost') {
+                        // Dessin du Fantôme ultra-effrayant translucide
+                        for (let stripe = drawStartX; stripe < drawEndX; stripe++) {
+                            let intStripe = Math.floor(stripe);
+                            if (intStripe >= 0 && intStripe < canvas.width && transformY < zBuffer[intStripe]) {
+                                ctx.fillStyle = "rgba(180, 210, 255, 0.9)";
+                                ctx.fillRect(intStripe, drawStartY, 1, drawEndY - drawStartY);
+                            }
+                        }
+                        // Yeux rouges sanglants du fantôme
+                        let ghostCenterX = spriteScreenX;
+                        let eyeWidth = Math.max(3, Math.floor(spriteWidth / 7));
+                        let eyeHeight = Math.max(4, Math.floor(spriteHeight / 5));
+                        let eyeY = drawStartY + Math.floor(spriteHeight / 3);
+
+                        for (let ex = ghostCenterX - eyeWidth * 2; ex <= ghostCenterX + eyeWidth * 2; ex++) {
+                            if ((ex >= ghostCenterX - eyeWidth * 2 && ex <= ghostCenterX - eyeWidth) || 
+                                (ex >= ghostCenterX + eyeWidth && ex <= ghostCenterX + eyeWidth * 2)) {
+                                let intEx = Math.floor(ex);
+                                if (intEx >= 0 && intEx < canvas.width && transformY < zBuffer[intEx]) {
+                                    ctx.fillStyle = "#ff0000";
+                                    ctx.fillRect(intEx, eyeY, eyeWidth, eyeHeight);
+                                }
+                            }
+                        }
+                    } else {
+                        // Dessin du Vampire effrayant (cape sombre et crocs acérés)
+                        for (let stripe = drawStartX; stripe < drawEndX; stripe++) {
+                            let intStripe = Math.floor(stripe);
+                            if (intStripe >= 0 && intStripe < canvas.width && transformY < zBuffer[intStripe]) {
+                                ctx.fillStyle = "rgba(40, 10, 10, 0.95)"; // Cape rouge sombre / noire
+                                ctx.fillRect(intStripe, drawStartY, 1, drawEndY - drawStartY);
+                            }
+                        }
+                        // Yeux jaunes perçants et visage pâle du vampire
+                        let vCenterX = spriteScreenX;
+                        let vEyeWidth = Math.max(2, Math.floor(spriteWidth / 8));
+                        let vEyeHeight = Math.max(3, Math.floor(spriteHeight / 6));
+                        let vEyeY = drawStartY + Math.floor(spriteHeight / 3);
+
+                        for (let ex = vCenterX - vEyeWidth * 2; ex <= vCenterX + vEyeWidth * 2; ex++) {
+                            if ((ex >= vCenterX - vEyeWidth * 2 && ex <= vCenterX - vEyeWidth) || 
+                                (ex >= vCenterX + vEyeWidth && ex <= vCenterX + vEyeWidth * 2)) {
+                                let intEx = Math.floor(ex);
+                                if (intEx >= 0 && intEx < canvas.width && transformY < zBuffer[intEx]) {
+                                    ctx.fillStyle = "#ffcc00"; // Yeux jaunes de vampire
+                                    ctx.fillRect(intEx, vEyeY, vEyeWidth, vEyeHeight);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Déclencheur dynamique et fluide aux carrefours (apparition aléatoire de fantômes ou vampires)
+        function checkIntersectionTrigger() {
+            let pX = Math.floor(player.x);
+            let pY = Math.floor(player.y);
+
+            let paths = 0;
+            if (map[pY - 1] && map[pY - 1][pX] !== 1) paths++;
+            if (map[pY + 1] && map[pY + 1][pX] !== 1) paths++;
+            if (map[pY][pX - 1] !== 1) paths++;
+            if (map[pY][pX + 1] !== 1) paths++;
+
+            if (paths >= 3 && Math.random() < 0.45 && !monster.visible) {
+                monster.x = player.x + player.dirX * 1.5;
+                monster.y = player.y + player.dirY * 1.5;
+                // Alterne aléatoirement entre un fantôme et un vampire terrifiant
+                monster.type = Math.random() < 0.5 ? 'ghost' : 'vampire';
+                monster.visible = true;
+
+                setTimeout(() => {
+                    monster.visible = false;
+                }, 550); // Apparition rapide et dynamique sans ralentir le site
+            }
+        }
+
+        function checkWinCondition() {
+            let currentX = Math.floor(player.x);
+            let currentY = Math.floor(player.y);
+
+            if (map[currentY][currentX] === 2) {
+                setTimeout(() => {
+                    let playAgain = confirm("Att tu as gagné comme ça quoi 😫 ? \nVeux-tu rejouer ?");
+                    if (playAgain) {
+                        player.x = 1.5;
+                        player.y = 1.5;
+                        gameLoop();
+                    } else {
+                        alert("À bientôt !");
+                    }
+                }, 100);
+            }
+        }
+
+        const moveSpeed = 0.15;
+        const rotSpeed = 0.1;
+
+        function moveForward() {
+            let nextX = player.x + player.dirX * moveSpeed;
+            let nextY = player.y + player.dirY * moveSpeed;
+            if (map[Math.floor(player.y)][Math.floor(nextX)] !== 1) player.x = nextX;
+            if (map[Math.floor(nextY)][Math.floor(player.x)] !== 1) player.y = nextY;
+            
+            checkIntersectionTrigger();
+            checkWinCondition();
+            gameLoop();
+        }
+
+        function moveBackward() {
+            let nextX = player.x - player.dirX * moveSpeed;
+            let nextY = player.y - player.dirY * moveSpeed;
+            if (map[Math.floor(player.y)][Math.floor(nextX)] !== 1) player.x = nextX;
+            if (map[Math.floor(nextY)][Math.floor(player.x)] !== 1) player.y = nextY;
+            
+            checkWinCondition();
+            gameLoop();
+        }
+
+        function turnLeft() {
+            let oldDirX = player.dirX;
+            player.dirX = player.dirX * Math.cos(rotSpeed) - player.dirY * Math.sin(rotSpeed);
+            player.dirY = oldDirX * Math.sin(rotSpeed) + player.dirY * Math.cos(rotSpeed);
+            let oldPlaneX = player.planeX;
+            player.planeX = player.planeX * Math.cos(rotSpeed) - player.planeY * Math.sin(rotSpeed);
+            player.planeY = oldPlaneX * Math.sin(rotSpeed) + player.planeY * Math.cos(rotSpeed);
+            gameLoop();
+        }
+
+        function turnRight() {
+            let oldDirX = player.dirX;
+            player.dirX = player.dirX * Math.cos(-rotSpeed) - player.dirY * Math.sin(-rotSpeed);
+            player.dirY = oldDirX * Math.sin(-rotSpeed) + player.dirY * Math.cos(-rotSpeed);
+            let oldPlaneX = player.planeX;
+            player.planeX = player.planeX * Math.cos(-rotSpeed) - player.planeY * Math.sin(-rotSpeed);
+            player.planeY = oldPlaneX * Math.sin(-rotSpeed) + player.planeY * Math.cos(-rotSpeed);
+            gameLoop();
+        }
+
+        document.getElementById("btnUp").addEventListener("click", moveForward);
+        document.getElementById("btnDown").addEventListener("click", moveBackward);
+        document.getElementById("btnLeft").addEventListener("click", turnLeft);
+        document.getElementById("btnRight").addEventListener("click", turnRight);
+
+        // Lancement initial du jeu
+        gameLoop();
+    </script>
+</body>
+</html>
