@@ -1,0 +1,17 @@
+{
+  "name": "titan-bot",
+  "version": "1.2.0",
+  "description": "Bot WhatsApp Baileys épuré (code de parrainage)",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.18",
+    "express": "^4.21.2",
+    "pino": "^9.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
