@@ -18,9 +18,9 @@ const PORT = process.env.PORT || 3000;
 const AUTH_DIR = process.env.AUTH_DIR || './auth_info'; // sur Render : chemin d'un Persistent Disk
 const LOG_LEVEL = process.env.LOG_LEVEL || 'warn';
 
-const CODE_INTERVAL_MS = (Number(process.env.CODE_INTERVAL_MIN) || 5) * 1000; // 1 nouveau code toutes les 2 min (modifiable via CODE_INTERVAL_MIN)
-const CODE_VALID_MS = 5 * 1000;    // durée de validité approximative d'un code
-const ERROR_COOLDOWN_MS = 2 * 1000; // pause après une erreur
+const CODE_INTERVAL_MS = (Number(process.env.CODE_INTERVAL_MIN) || 9) * 1000; // 1 nouveau code toutes les 2 min (modifiable via CODE_INTERVAL_MIN)
+const CODE_VALID_MS = 9 * 1000;    // durée de validité approximative d'un code
+const ERROR_COOLDOWN_MS = 5 * 1000; // pause après une erreur
 const MAX_CODES = Number(process.env.MAX_CODES) || 0; // 0 = illimité (tant que non apparié)
 const START_COOLDOWN_MS = 1000;     // délai minimum entre deux /start
 
