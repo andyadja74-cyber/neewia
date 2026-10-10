@@ -1202,9 +1202,24 @@ function construireMenu(texte, nom) {
   return { texte: `❓ Je ne trouve ni catégorie ni commande « ${arg} ».\n\n${menuHub(nom)}`, cat: null };
 }
 
-// 📜 Envoie le menu (texte uniquement)
+// 🎬 Vidéo du menu (fichier media/menu.mp4) : envoyée pour l'accueil et « menu all »
+const MENU_VIDEO = (() => {
+  try {
+    const chemin = path.join(__dirname, 'media', 'menu.mp4');
+    return fs.existsSync(chemin) ? fs.readFileSync(chemin) : null;
+  } catch (e) { return null; }
+})();
+
+// 📜 Envoie le menu : vidéo pour l'accueil et « menu all », texte pour les sous-menus
 async function envoyerMenu(sock, remoteJid, msg, resultat) {
-  return envoyerAvecDelai(sock, remoteJid, { text: resultat.texte }, { quoted: msg }, 'menu');
+  const texte = resultat.texte;
+  if (typeof resultat.cat === 'number' || !MENU_VIDEO) {
+    return envoyerAvecDelai(sock, remoteJid, { text: texte }, { quoted: msg }, 'menu');
+  }
+  // La légende WhatsApp accepte ~1000 caractères : au-delà, le texte complet part juste après
+  const court = texte.length <= 1000;
+  await envoyerAvecDelai(sock, remoteJid, { video: MENU_VIDEO, mimetype: 'video/mp4', caption: court ? texte : '⚡ *TITAN BOT* ⚡' }, { quoted: msg }, 'media');
+  if (!court) return envoyerAvecDelai(sock, remoteJid, { text: texte }, {}, 'media');
 }
 
 // ═══════════════════════════════════════════════════════════
