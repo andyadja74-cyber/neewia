@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require("express");
 const https = require("https");
-const axios = require("axios"); 
+const axios = require("axios");
 
 const {
   default: makeWASocket,
@@ -18,20 +18,26 @@ const {
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 
-// Importation des données depuis data.js[span_1](start_span)[span_1](end_span)
+// Importation des données depuis data.js
 const data = require('./data');
 
 const {
   REPONSES_8BALL,
   COMMENTAIRES_LOVE,
   CONSEILS_LOVE,
+  MOTS_AMOUR_PRIVE,
+  REPONSE_AMOUR_MAMAN,
   VERDICTS_MENSONGE,
   DONNEES_CERVEAU,
   COMMENTAIRES_CERVEAU,
+  LISTE_DRAGUES,
+  MADARA_REPLIQUES,
+  MADARA_TECHNIQUES,
   vueUniqueCache,
   sessionsMotDePasse,
   profilsJoueurs,
-  membresSalues
+  membresSalues,
+  sessionsMaman
 } = data;
 
 const app = express();
@@ -39,9 +45,13 @@ const PORT = process.env.PORT || 3000;
 
 // Anti-doublons & Cache Anti-Delete & Mutes
 const processedMessages = new Set();
+const messageCache = {};
 const utilisateursMutes = new Set();
 // 🔒 Mode privé : personnes déjà prévenues (le bot ne le dit qu'une fois) + compteur de commandes pour .fiche
 const refusPriveDeja = new Set();
+// Accès admin temporaire accordé aux personnes qui ont demandé l'accès dans un groupe puis envoyé 2010 en privé.
+const demandesAccesPrive = new Set();
+const utilisateursAutorisesMotDePasse = new Set();
 const statsCommandes = {};
 
 // ═══════════════════════════════════════════════════════════
@@ -178,21 +188,56 @@ async function journaliserMessage(sock, msg, { muet = false } = {}) {
       `┃ 🏷️ Type     : ${type}${tags.length ? `   [${tags.join(' · ')}]` : ''}`,
       `┃ 💬 Contenu  : ${contenu}`,
       `┃ 🆔 ID       : ${msg.key.id}`,
-      `┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
+      `┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
     ].join('\n'));
   } catch (e) {
     console.error('[LOG] ⚠️ Journal du message impossible :', e && e.message ? e.message : e);
   }
 }
 
+// ⏱️ Délai entre deux phrases de drague (modifiable avec la variable Render DRAGUE_DELAI_MS)
+const DELAI_DRAGUE_MS = Math.max(1000, parseInt(process.env.DRAGUE_DELAI_MS, 10) || 1000);
 // 🚦 Anti-spam : une commande par utilisateur toutes les 2,5 secondes
 const COOLDOWN_COMMANDE_MS = 2500;
 const dernieresCommandes = new Map();
 
+// 🖼️ Images des menus (fichier menu-images.js : 4 images en base64)
+const MENU_IMAGES = (() => {
+  try {
+    return require('./menu-images').map(b => Buffer.from(b, 'base64'));
+  } catch (e) {
+    console.error('⚠️ menu-images.js introuvable : les menus seront envoyés sans image.');
+    return [];
+  }
+})();
+
+// 🎬 Vidéo du menu (optionnelle) : fichier media/menu.mp4 dans le projet
+const MENU_VIDEO = (() => {
+  try {
+    const chemin = path.join(__dirname, 'media', 'menu.mp4');
+    return fs.existsSync(chemin) ? fs.readFileSync(chemin) : null;
+  } catch (e) {
+    return null;
+  }
+})();
+
+let dernierIndexImageMenu = -1;
+function choisirImageMenu(cat) {
+  if (!MENU_IMAGES.length) return null;
+  // Menu d'une catégorie : menu 1 → image 1, menu 2 → image 2, etc.
+  if (typeof cat === 'number') return MENU_IMAGES[cat % MENU_IMAGES.length];
+  // Accueil du menu : image au hasard (jamais deux fois la même d'affilée)
+  let i;
+  do { i = Math.floor(Math.random() * MENU_IMAGES.length); }
+  while (MENU_IMAGES.length > 1 && i === dernierIndexImageMenu);
+  dernierIndexImageMenu = i;
+  return MENU_IMAGES[i];
+}
+
 process.on('uncaughtException', (err) => console.error('⚠️️ Erreur évitée :', err));
 process.on('unhandledRejection', (reason) => console.error('⚠️ Promesse rejetée :', reason));
 
-app.get("/", (req, res) => res.send("⚡ TITAN BOT GROUPE EN LIGNE"));
+app.get("/", (req, res) => res.send("⚡ *ATOMIC*"));
 app.get("/health", (req, res) => res.status(200).send("OK"));
 
 app.listen(PORT, () => console.log(`🌐 Serveur actif sur le port ${PORT}`));
@@ -207,17 +252,28 @@ setInterval(() => {
 
 // 📁 GESTIONNAIRE DE SESSION LOCAL
 // Plan gratuit Render : pas de disque persistant, on utilise toujours le dossier local (la variable AUTH_DIR est ignorée)
-const AUTH_DIR = path.join(__dirname, 'auth_info');
+// Render : configure AUTH_DIR vers le chemin du disque persistant si tu en as un.
+const AUTH_DIR = path.resolve(process.env.AUTH_DIR || path.join(__dirname, 'auth_info'));
+
 async function getAuthState() {
-  console.log(`📁 Utilisation du stockage local (${AUTH_DIR})...`);
+  // Évite ENOENT si le dossier n'existe pas encore au démarrage.
+  fs.mkdirSync(AUTH_DIR, { recursive: true });
+  console.log(`📁 Dossier de session WhatsApp : ${AUTH_DIR}`);
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+
+  // Baileys peut émettre creds.update pendant une fermeture/reconnexion.
+  // On recrée le dossier avant chaque sauvegarde pour éviter creds.json ENOENT.
+  const saveCredsSafe = async () => {
+    fs.mkdirSync(AUTH_DIR, { recursive: true });
+    await saveCreds();
+  };
+
   return {
     state,
-    saveCreds,
+    saveCreds: saveCredsSafe,
     clearSession: async () => {
-      if (fs.existsSync(AUTH_DIR)) {
-        fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-      }
+      fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+      fs.mkdirSync(AUTH_DIR, { recursive: true });
     }
   };
 }
@@ -225,18 +281,14 @@ async function getAuthState() {
 // ⏱️ SIMULATION DE FRAPPE HUMAINE RÉALISTE (FAÇON "NUMI" / HUMAIN NORMAL SUR LES RÉSEAUX)
 function calculerDelaiEnvoi(texte, typeAction = 'texte') {
   if (typeAction === 'media' || typeAction === 'qr') {
-    return 3000; 
+    return 700;
   }
 
   const longueur = texte ? texte.length : 20;
-  // Vitesse de frappe proportionnelle au nombre de caractères (~55ms par caractère)
-  let delaiMs = longueur * 55; 
-  
-  if (delaiMs < 4500) delaiMs = 4500; // Minimum 4.5 secondes pour que ça fasse naturel
-  if (delaiMs > 20000) delaiMs = 20000; // Plafond à 20 secondes pour les très longs textes
-
-  // Ajout d'une variation aléatoire pour imiter parfaitement un humain qui tape et hésite
-  return Math.floor(delaiMs + (Math.random() * 2500));
+  // Mode rapide : réponses généralement envoyées en moins d'une seconde.
+  // Le délai reste court même pour les textes longs afin de rendre le bot plus réactif.
+  const delaiMs = Math.min(1000, Math.max(250, longueur * 8));
+  return delaiMs + Math.floor(Math.random() * 250);
 }
 
 // 🧵 FILE D'ATTENTE PAR CONVERSATION : un seul message à la fois par chat (comme un humain)
@@ -261,19 +313,19 @@ async function passerEnLigne(sock) {
 }
 
 // ✍️ COMPOSING CONTINU : "en train d'écrire…" affiché tant que la réponse n'est pas partie
-// (relancé toutes les 4 s car WhatsApp l'éteint tout seul ; coupe-circuit de sécurité à 45 s)
+// (relancé toutes les 4 s car WhatsApp l'éteint tout seul ; coupe-circuit de sécurité à 180 s)
 const composingActifs = new Map();
 function demarrerComposing(sock, jid) {
   const existant = composingActifs.get(jid);
   if (existant) {
     clearTimeout(existant.securite);
-    existant.securite = setTimeout(() => arreterComposing(sock, jid), 45000);
+    existant.securite = setTimeout(() => arreterComposing(sock, jid), 180000);
     return;
   }
   const envoyer = async () => { try { await sock.sendPresenceUpdate('composing', jid); } catch (e) {} };
   envoyer();
   const intervalle = setInterval(envoyer, 4000);
-  const securite = setTimeout(() => arreterComposing(sock, jid), 45000);
+  const securite = setTimeout(() => arreterComposing(sock, jid), 180000);
   composingActifs.set(jid, { intervalle, securite });
 }
 function arreterComposing(sock, jid) {
@@ -285,36 +337,56 @@ function arreterComposing(sock, jid) {
   sock.sendPresenceUpdate('paused', jid).catch(() => {});
 }
 
-// 🛡️ Fonction d'envoi sécurisée : lecture du message (coches bleues), "en train d'écrire…", puis envoi
+// 🛡️ Un envoi : lecture (coches bleues), "en train d'écrire…" continu, délai humain, puis envoi
+async function envoyerUnPas(sock, remoteJid, content, options = {}, typeAction = 'texte') {
+  const texte = typeof content === 'string' ? content : (content.text || content.caption || "");
+  const delaiMs = calculerDelaiEnvoi(texte, typeAction);
+
+  await passerEnLigne(sock);
+  demarrerComposing(sock, remoteJid);
+
+  // Un humain lit d'abord le message avant de répondre
+  if (options.quoted && options.quoted.key) {
+    await sleep(entierAlea(100, 300));
+    try { await sock.readMessages([options.quoted.key]); } catch (e) {}
+  }
+
+  await sleep(delaiMs);
+
+  const sentMsg = await sock.sendMessage(remoteJid, content, options);
+  if (sentMsg && sentMsg.key && sentMsg.key.id) {
+    processedMessages.add(sentMsg.key.id);
+    memoriserMonEnvoi(remoteJid, sentMsg.key);
+  }
+  return sentMsg;
+}
+
+// ✍️ Suivi des envois : "en train d'écrire…" reste affiché tant qu'il reste un message à envoyer
+const envoisEnAttente = new Map();   // jid -> nombre d'envois en cours ou en file
+function commencerEnvoi(sock, jid) {
+  envoisEnAttente.set(jid, (envoisEnAttente.get(jid) || 0) + 1);
+  demarrerComposing(sock, jid);
+}
+function finirEnvoi(sock, jid) {
+  const restant = (envoisEnAttente.get(jid) || 1) - 1;
+  if (restant <= 0) {
+    envoisEnAttente.delete(jid);
+    arreterComposing(sock, jid);
+  } else {
+    envoisEnAttente.set(jid, restant);
+  }
+}
+
 async function envoyerAvecDelai(sock, remoteJid, content, options = {}, typeAction = 'texte') {
   options = sansCitationSupprimee(options);
+  commencerEnvoi(sock, remoteJid);
   return enFile(remoteJid, async () => {
     try {
-      const texte = typeof content === 'string' ? content : (content.text || content.caption || "");
-      const delaiMs = calculerDelaiEnvoi(texte, typeAction);
-
-      await passerEnLigne(sock);
-
-      // ✍️ "En train d'écrire…" dès le début, sans coupure, jusqu'à l'arrivée du message
-      demarrerComposing(sock, remoteJid);
-
-      // Un humain lit d'abord le message avant de répondre
-      if (options.quoted && options.quoted.key) {
-        await sleep(entierAlea(600, 1800));
-        try { await sock.readMessages([options.quoted.key]); } catch (e) {}
-      }
-
-      await sleep(delaiMs);
-
-      const sentMsg = await sock.sendMessage(remoteJid, content, options);
-      if (sentMsg && sentMsg.key && sentMsg.key.id) {
-        processedMessages.add(sentMsg.key.id);
-      }
-      return sentMsg;
+      return await envoyerUnPas(sock, remoteJid, content, options, typeAction);
     } catch (err) {
       console.error("⚠ Erreur d'envoi :", err);
     } finally {
-      arreterComposing(sock, remoteJid);
+      finirEnvoi(sock, remoteJid);
     }
   });
 }
@@ -423,13 +495,8 @@ function contenuMedia(cache, texte) {
 }
 
 async function envoyerMediaCache(sock, cible, cache, texte, options = {}) {
-  let res;
-  if (cache.type === 'audio') {
-    const mentions = cache.expediteur ? [cache.expediteur] : [];
-    const r1 = await sock.sendMessage(cible, { text: texte, mentions }, options);
-    if (r1 && r1.key && r1.key.id) processedMessages.add(r1.key.id);
-  }
-  res = await sock.sendMessage(cible, contenuMedia(cache, texte), cache.type === 'audio' ? {} : options);
+  // Image et vidéo : la légende fait partie du média. Vocal : pas de légende possible, il part seul.
+  const res = await sock.sendMessage(cible, contenuMedia(cache, texte), cache.type === 'audio' ? {} : options);
   if (res && res.key && res.key.id) processedMessages.add(res.key.id);
   return res;
 }
@@ -477,7 +544,7 @@ async function traiterVueUnique(sock, msg) {
   if (!VU_AUTO) return;
 
   const nom = profilsJoueurs[expediteur] || `@${expediteur.split('@')[0]}`;
-  const texte = `🚨👀 *VUE UNIQUE INTERCEPTÉE PAR TITAN !* ${lab.emoji}\n👤 *Envoyée par :* ${nom}\n📅 *Date :* ${fdate}${cache.caption ? `\n📝 *Légende :* ${cache.caption}` : ''}\n✨ _Aucune cachette possible ici 😈_`;
+  const texte = `🚨👀 *VUE UNIQUE INTERCEPTÉE PAR ATOMIC !* ${lab.emoji}\n👤 *Envoyée par :* ${nom}\n📅 *Date :* ${fdate}${cache.caption ? `\n📝 *Légende :* ${cache.caption}` : ''}\n✨ _Aucune cachette possible ici 😈_`;
   const botNumber = sock.user.id.split(':')[0] + '@s.whatsapp.net';
   const cible = VU_DEST === 'moi' ? botNumber : chatJid;
 
@@ -528,8 +595,8 @@ async function commandeVueUnique(sock, msg, remoteJid) {
 
   const nom = cache.expediteur ? (profilsJoueurs[cache.expediteur] || `@${cache.expediteur.split('@')[0]}`) : null;
   const texte = `🔓 *VUE UNIQUE RÉCUPÉRÉE* 🥷${nom ? `\n👤 *Envoyée par :* ${nom}` : ''}`;
+  // Un vocal ne peut pas avoir de légende : il part seul, sans message texte séparé
   if (cache.type === 'audio') {
-    await envoyerAvecDelai(sock, remoteJid, { text: texte, mentions: cache.expediteur ? [cache.expediteur] : [] }, { quoted: msg }, 'texte');
     await envoyerAvecDelai(sock, remoteJid, contenuMedia(cache, texte), {}, 'media');
   } else {
     await envoyerAvecDelai(sock, remoteJid, contenuMedia(cache, texte), { quoted: msg }, 'media');
@@ -719,6 +786,7 @@ async function commandeVoc(sock, msg, remoteJid, cleanText) {
   if (vocOccupe) return repondre('⏳ Je prépare déjà un vocal, réessaie dans un instant.');
 
   vocOccupe = true;
+  commencerEnvoi(sock, remoteJid);
   try {
     await preparerBinaires();
     if (!bin.ffmpeg) throw new Error('FFMPEG_ABSENT');
@@ -737,6 +805,7 @@ async function commandeVoc(sock, msg, remoteJid, cleanText) {
       : "⚠️ Je n'ai pas réussi à fabriquer le vocal pour le moment, réessaie dans un instant.");
   } finally {
     vocOccupe = false;
+    finirEnvoi(sock, remoteJid);
   }
 }
 
@@ -807,6 +876,7 @@ async function commandeVocF(sock, msg, remoteJid, cleanText) {
     return;
   }
 
+  commencerEnvoi(sock, remoteJid);
   try {
     await preparerBinaires();
     if (!bin.ffmpeg) throw new Error('FFMPEG_ABSENT');
@@ -821,6 +891,8 @@ async function commandeVocF(sock, msg, remoteJid, cleanText) {
   } catch (e) {
     console.error(`[VOC-F] ❌ ${e && e.message ? e.message : e}`);
     arreterComposing(sock, remoteJid);
+  } finally {
+    finirEnvoi(sock, remoteJid);
   }
 }
 
@@ -841,6 +913,29 @@ function sansCitationSupprimee(options) {
     return reste;
   }
   return options;
+}
+
+// 📒 Mes messages envoyés, par discussion (pour la commande .del)
+const mesEnvois = new Map();
+function memoriserMonEnvoi(jid, key) {
+  if (!jid || !key || !key.id) return;
+  const liste = mesEnvois.get(jid) || [];
+  if (liste.some(k => k.id === key.id)) return;
+  liste.push({ remoteJid: jid, fromMe: true, id: key.id });
+  if (liste.length > 300) liste.shift();
+  mesEnvois.set(jid, liste);
+}
+
+// 🗑️ .del → supprime pour tout le monde tous les messages envoyés par le propriétaire dans ce chat
+async function commandeDel(sock, remoteJid) {
+  const liste = (mesEnvois.get(remoteJid) || []).filter(k => !messagesSupprimes.has(k.id));
+  mesEnvois.set(remoteJid, []);
+  let reussis = 0;
+  for (const key of liste) {
+    try { await sock.sendMessage(remoteJid, { delete: key }); reussis++; } catch (e) {}
+    await sleep(400);
+  }
+  console.log(`[DEL] 🗑️ ${reussis}/${liste.length} message(s) supprimé(s) dans ${remoteJid}`);
 }
 
 // 💘 .cute [nombre] → compliments extra (3 à 20, 10 par défaut)
@@ -880,10 +975,10 @@ async function commandeCute(sock, msg, remoteJid, cleanText) {
       try { await sock.readMessages([msg.key]); } catch (e) {}
       for (let i = 0; i < compliments.length; i++) {
         await sock.sendPresenceUpdate('composing', remoteJid);
-        await sleep(1500);
+        await sleep(300);
         await sock.sendMessage(remoteJid, { text: compliments[i] });
         try { await sock.sendPresenceUpdate('paused', remoteJid); } catch (e) {}
-        if (i < compliments.length - 1) await sleep(1500);
+        if (i < compliments.length - 1) await sleep(1000);
       }
     } catch (err) {
       console.error('⚠️ Erreur cute :', err);
@@ -924,72 +1019,26 @@ async function gererReponseMariage(sock, remoteJid, senderJid, lowerText) {
   return true;
 }
 
-// ➕ .add 225XXXXXXXXXX → ajoute un numéro dans le groupe (propriétaire, bot admin requis)
-async function commandeAdd(sock, msg, remoteJid, isGroup, cleanText) {
-  const repondre = (texte) => envoyerAvecDelai(sock, remoteJid, { text: texte }, { quoted: msg }, 'texte');
-  if (!isGroup) return repondre("⚠️ La commande *.add* ne marche que dans un groupe.");
-  const numero = cleanText.replace(/^\.add\s*/i, '').replace(/\D/g, '');
-  if (!/^\d{8,15}$/.test(numero)) return repondre("⚠️ Numéro invalide. Exemple : *.add 2250700000000* (indicatif pays inclus)");
+// 🖼️ .routine → l'image de la routine (media/routine.jpg)
+const ROUTINE_IMAGE = (() => {
   try {
-    const res = await sock.groupParticipantsUpdate(remoteJid, [`${numero}@s.whatsapp.net`], 'add');
-    const statut = String(res && res[0] ? res[0].status : '');
-    if (statut === '200') return repondre(`✅ *+${numero}* a été ajouté au groupe !`);
-    if (statut === '409') return repondre(`ℹ️ *+${numero}* est déjà dans le groupe.`);
-    if (statut === '403') return repondre(`🔒 *+${numero}* refuse d'être ajouté (paramètres de confidentialité).`);
-    return repondre(`⚠️ Ajout impossible (statut ${statut || 'inconnu'}). Vérifie que je suis admin du groupe.`);
-  } catch (e) {
-    console.error(`[ADD] ❌ ${e && e.message ? e.message : e}`);
-    return repondre("⚠️ Ajout impossible. Vérifie que je suis admin du groupe.");
-  }
-}
-
-// 📊 .infogroupe → détails complets du groupe
-function dureeEphemere(s) {
-  if (!s) return 'désactivés';
-  const connues = { 86400: '24 h', 604800: '7 jours', 7776000: '90 jours' };
-  return connues[s] || `${s} s`;
-}
-async function commandeInfoGroupe(sock, msg, remoteJid, isGroup) {
-  const repondre = (texte) => envoyerAvecDelai(sock, remoteJid, { text: texte }, { quoted: msg }, 'texte');
-  if (!isGroup) return repondre("⚠️ La commande *.infogroupe* ne marche que dans un groupe.");
-  let meta;
-  try { meta = await sock.groupMetadata(remoteJid); }
-  catch (e) { return repondre("⚠️ Impossible de lire les infos du groupe pour le moment."); }
-
-  const tz = process.env.BOT_TZ || 'Africa/Abidjan';
-  const admins = meta.participants.filter(p => p.admin);
-  const creeLe = meta.creation
-    ? new Date(meta.creation * 1000).toLocaleString('fr-FR', { dateStyle: 'long', timeStyle: 'short', timeZone: tz })
-    : 'inconnue';
-  const createur = meta.owner;
-  const description = meta.desc ? (meta.desc.length > 300 ? meta.desc.slice(0, 300) + '…' : meta.desc) : 'aucune';
-  const listeAdmins = admins.slice(0, 15).map(a => `@${a.id.split('@')[0]}`).join(' ') + (admins.length > 15 ? ` …(+${admins.length - 15})` : '');
-  const mentions = [...new Set([createur, ...admins.map(a => a.id)].filter(Boolean))];
-
-  const texte = enTete('📊 *INFOS DU GROUPE*', [
-    `🏷️ Nom : *${meta.subject || 'sans nom'}*`,
-    `🆔 ID : ${remoteJid.split('@')[0]}`,
-    `📅 Créé le : ${creeLe}`,
-    `👑 Créateur : ${createur ? `@${createur.split('@')[0]}` : 'inconnu'}`,
-    `👥 Membres : *${meta.participants.length}*`,
-    `🛡️ Admins (${admins.length}) : ${listeAdmins || 'aucun'}`,
-    `📢 Seuls les admins écrivent : ${meta.announce ? 'oui' : 'non'}`,
-    `✏️ Seuls les admins modifient : ${meta.restrict ? 'oui' : 'non'}`,
-    `⏳ Messages éphémères : ${dureeEphemere(meta.ephemeralDuration)}`
-  ]) + `\n\n📝 *Description*\n${description}`;
-
-  let photo = null;
-  try { photo = await sock.profilePictureUrl(remoteJid, 'image'); } catch (e) {}
-  if (photo) return envoyerAvecDelai(sock, remoteJid, { image: { url: photo }, caption: texte, mentions }, { quoted: msg }, 'media');
-  return envoyerAvecDelai(sock, remoteJid, { text: texte, mentions }, { quoted: msg }, 'texte');
+    const chemin = path.join(__dirname, 'media', 'routine.jpg');
+    return fs.existsSync(chemin) ? fs.readFileSync(chemin) : null;
+  } catch (e) { return null; }
+})();
+async function commandeRoutine(sock, msg, remoteJid) {
+  const texte = "Voilà la routine de mon créateur 🤣😂😂";
+  if (ROUTINE_IMAGE) return envoyerAvecDelai(sock, remoteJid, { image: ROUTINE_IMAGE, caption: texte }, { quoted: msg }, 'media');
+  return envoyerAvecDelai(sock, remoteJid, { text: texte }, { quoted: msg }, 'texte');
 }
 
 // 💡 Astuces affichées dans l'accueil du menu
 const ASTUCES_MENU = [
   "Tape *.menu all* pour voir toutes les commandes d'un coup",
   "Tes commandes disparaissent dès qu'elles sont lancées : c'est voulu 😌",
+  "Règle le nombre de phrases : *drague @personne 7* (jusqu'à 10)",
   "Essaie *.cute 15* pour recevoir 15 compliments",
-  "*.infogroupe* te donne tous les détails du groupe 📊"
+  "*.routine* → tu verras la routine de mon créateur 🤣"
 ];
 
 // 📚 REGISTRE DES COMMANDES
@@ -1011,38 +1060,47 @@ const CATEGORIES_MENU = [
       { noms: ['.warn'], args: '[@mention] [raison]', desc: 'Avertir un membre', owner: true },
       { noms: ['.mute'], args: '[@mention]', desc: "Bloquer l'accès au bot à un membre", owner: true },
       { noms: ['.unmute'], args: '[@mention]', desc: "Débloquer l'accès au bot", owner: true },
-      { noms: ['.private on', '.private off'], exact: true, aff: '.private', args: 'on | off', desc: "Verrouiller / déverrouiller le bot", owner: true },
-      { noms: ['.add'], args: '[225XXXXXXXXXX]', desc: 'Ajouter un numéro dans le groupe', owner: true }
+      { noms: ['.private on', '.private off'], exact: true, aff: '.private', args: 'on | off', desc: "Verrouiller / déverrouiller le bot", owner: true }
     ]
   },
   {
     id: 'outils', emoji: '🛠️', titre: 'Outils & Tech',
     cmds: [
       { groupe: '📸 Médias', noms: ['.v'], desc: 'Revoir une photo / vidéo / vocal en vue unique' },
-      { groupe: '📸 Médias', noms: ['.pp', '.p'], aff: '.pp', args: '[@mention]', desc: "Photo de profil" },
-      { groupe: '📸 Médias', noms: ['pipi'], args: '[@mention]', desc: "Photo de profil (pipi)" },
+      { groupe: '📸 Médias', noms: ['.guerre'], exact: true, desc: 'Envoyer la vidéo guerre.mp4' },
+      { groupe: '📸 Médias', noms: ['.pp', '.p'], aff: '.pp', args: '[@mention]', desc: "Photo de profil (groupe & privé)" },
+      { groupe: '📸 Médias', noms: ['pipi'], args: '[@mention]', desc: "Photo de profil (pipi, groupe & privé)" },
       { groupe: '📸 Médias', noms: ['.qr'], args: '[texte]', desc: 'Générer un QR code' },
       { groupe: '📸 Médias', noms: ['.image', '.img'], args: '[mot-clé]', desc: "Image sur n'importe quel sujet (Google / web)" },
       { groupe: '📸 Médias', noms: ['.imagine', '.gen'], aff: '.imagine', args: '[description]', desc: "Image créée par l'IA" },
       { groupe: '📸 Médias', noms: ['.voc'], args: '[texte]', desc: "Je dis ton texte en vocal (voix d'homme grave)" },
       { groupe: '📸 Médias', noms: ['.voc-f'], args: '[texte]', desc: "Je dis ton texte en vocal (voix de femme)" },
+      { groupe: '🌐 Utilitaires', noms: ['.translate', '.trad'], args: '[lang] [texte]', desc: 'Traduire un texte' },
+      { groupe: '🌐 Utilitaires', noms: ['.dico', '.def', '.dictionnaire'], aff: '.dico', args: '[mot]', desc: 'Dictionnaire en ligne' },
+      { groupe: '🌐 Utilitaires', noms: ['ret'], args: '[phrase] (nombre)', desc: 'Répéter une phrase', test: t => t.startsWith('ret ') },
       { groupe: '🎭 Fun & Social', noms: ['.8ball'], args: '[question]', desc: 'Boule de cristal' },
       { groupe: '🎭 Fun & Social', noms: ['.love'], args: '[@mention] [@mention]', desc: "Test d'amour (groupe & privé)" },
       { groupe: '🎭 Fun & Social', noms: ['.mariage'], args: '[@mention]', desc: 'Épouser quelqu\'un' },
       { groupe: '🎭 Fun & Social', noms: ['.divorce'], exact: true, desc: 'Divorcer' },
-      { groupe: '🎭 Fun & Social', noms: ['.cerveau', 'cerveau'], aff: '.cerveau', args: '[@mention]', desc: "Scanner l'activité mentale", test: t => /^\.?(cerveau|mox)(\s|$)/.test(t) },
-      { groupe: '🎭 Fun & Social', noms: ['.balance'], args: '[@mention]', desc: 'Jauge Ange ou Démon' },
+      { groupe: '🎭 Fun & Social', noms: ['.cerveau', 'cerveau'], aff: '.cerveau', args: '[@mention]', desc: "Scanner l'activité mentale (groupe & privé)", test: t => /^\.?(cerveau|mox)(\s|$)/.test(t) },
+      { groupe: '🎭 Fun & Social', noms: ['.hack'], args: '[@mention]', desc: "Simulation de hack (groupe & privé)" },
+      { groupe: '🎭 Fun & Social', noms: ['.balance'], args: '[@mention]', desc: 'Jauge Ange ou Démon (groupe & privé)' },
       { groupe: '🎭 Fun & Social', noms: ['.dec', '.mensonge'], args: '[texte]', desc: 'Détecteur de mensonges' },
+      { groupe: '🎭 Fun & Social', noms: ['drague', '.drague'], aff: 'drague', args: '[@mention] (nombre)', desc: 'Phrases de drague (3 par défaut, jusqu\'à 10)' },
       { groupe: '🎭 Fun & Social', noms: ['.cute'], args: '[nombre]', desc: 'Compliments extra (10 par défaut, jusqu\'à 20)' },
+      { groupe: '🎭 Fun & Social', noms: ['.madara'], args: '[techniques | conseil]', desc: 'Répliques originales façon stratège shinobi' },
+      { groupe: '🎭 Fun & Social', noms: ['.techniques'], exact: true, desc: 'Afficher les techniques fictives inspirées de Naruto' },
       { groupe: '🎭 Fun & Social', noms: ['.askwedding'], args: '[@mention]', desc: 'Demande en mariage ❤️' },
-      { groupe: '🧹 Gestion', noms: ['.infogroupe'], exact: true, desc: 'Détails complets du groupe' }
+      { groupe: '🎭 Fun & Social', noms: ['.routine'], exact: true, desc: 'La routine de mon créateur 🤣' },
+      { groupe: '🎭 Fun & Social', noms: ['.gamble', '.gumball'], aff: '.gamble', exact: true, desc: "Quel Gumball es-tu aujourd'hui ? 🎈" },
+      { groupe: '🧹 Gestion', noms: ['.del'], exact: true, desc: 'Supprimer pour tout le monde tous tes messages ici' }
     ]
   }
 ];
 
 const MENU_REGEX = /^(\.menu|menu|\.help|\.aide)(?:\s+(.+)|(\d+))?$/;
 const NUM_EMOJIS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣'];
-const EMOJIS_REACTION = ['😌', '💅', '🗿', '🧼', '🤦', '🫶', '🤳', '🎗️'];
+const EMOJIS_REACTION = ['🏄', '💅', '🗿', '🇪🇸', '🤦', '🫶', '🤳', '🎗️'];
 
 function normaliserTexte(s) {
   return (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
@@ -1132,33 +1190,120 @@ function legendeBadges(cmds) {
   return l.length ? `\n\n_${l.join(' • ')}_` : '';
 }
 
-function menuHub(nom) {
-  const { heure, date } = heureLocale();
-  const ent = enTete('⚡ *TITAN BOT* ⚡', [
-    `${salutation(heure)} *${nom}* 👋`,
-    `🕒 ${date}`,
-    data.botPrivateMode ? '🔒 Mode : *Privé*' : '🔓 Mode : *Public*',
-    `⏱️ En ligne depuis : ${dureeLisible(process.uptime())}`,
-    `📚 ${nbCommandes()} commandes • ${CATEGORIES_MENU.length} catégories`
-  ]);
-  const max = Math.max(...CATEGORIES_MENU.map(c => c.cmds.length));
-  const barre = (n) => { const b = Math.round((n / max) * 8); return '▰'.repeat(b) + '▱'.repeat(8 - b); };
-  const liste = CATEGORIES_MENU.map((cat, i) => `${NUM_EMOJIS[i] || `${i + 1}.`} ${cat.emoji} *${cat.titre}* · ${cat.cmds.length}\n     ${barre(cat.cmds.length)}`).join('\n');
-  return `${ent}\n\n📂 *CATÉGORIES*\n${liste}\n\n💡 _${alea(ASTUCES_MENU)}_`;
+// 🎨 ═══════════════════════════════════════════════════════════
+// MENUS DYNAMIQUES : accueil, catégories 1 / 2 / 3 et « .menu all »
+// La légende est recalculée à chaque appel (grade, progression, heure, humeur du bot…).
+// Elle reste sous la limite de légende WhatsApp : si un détail ne tient pas, il est simplifié.
+// ═══════════════════════════════════════════════════════════
+const LIMITE_LEGENDE = 1000;
+
+const HUMEURS_BOT = [
+  "je suis en forme aujourd'hui, profitez-en 😎",
+  "mode multitâche activé, je gère tout en même temps 🧠",
+  "un peu fatigué(e) mais toujours là pour vous 😴",
+  "prêt à balancer des commandes à la chaîne 🚀",
+  "je tourne sur mon petit serveur avec amour ❤️",
+  "de bonne humeur, faut pas abuser quand même 😌",
+  "en mode sérieux… enfin presque 🤖",
+  "je compte les commandes que vous tapez, juste pour voir 👀"
+];
+
+const DESC_CATEGORIES = {
+  identite: 'Profil, blaze et grade VIP',
+  moderation: 'Gestion du groupe et sécurité',
+  outils: 'Vocaux, IA, Jeux, Drague & Utilitaires'
+};
+
+function tenirDansLimite(texte) {
+  return texte.length <= LIMITE_LEGENDE ? texte : texte.slice(0, LIMITE_LEGENDE - 1) + '…';
 }
 
-function menuCategorie(i) {
+function boiteMenu(titre, lignes) {
+  return [`╭━━〔 ${titre} 〕━━╮`, ...lignes.map(l => `┃ ${l}`), '╰━━━━━━━━━━━━━━━━━━━━━━━╯'].join('\n');
+}
+
+function salutationMenu(heure) {
+  if (heure >= 5 && heure < 12) return 'Bonjour';
+  if (heure >= 12 && heure < 18) return 'Bon après-midi';
+  if (heure >= 18 && heure < 22) return 'Bonsoir';
+  return 'Bonne nuit';
+}
+
+// Lignes de profil : salutation, grade, progression vers le grade suivant, heure, humeur du bot
+function lignesProfil(nom, jid) {
+  const { heure, date } = heureLocale();
+  const nb = statsCommandes[jid] || 0;
+  let grade = GRADES[0];
+  let suivant = null;
+  GRADES.forEach((g, i) => { if (nb >= g[0]) { grade = g; suivant = GRADES[i + 1] || null; } });
+  const progression = suivant
+    ? `${barre(Math.round(((nb - grade[0]) / (suivant[0] - grade[0])) * 100), 8)} → ${suivant[1]} dans ${suivant[0] - nb} cmd`
+    : `${barre(100, 8)} 🏆 grade maximum atteint`;
+  return [
+    `🌟 ${salutationMenu(heure)} *${nom}* !`,
+    `🎖️ Grade : ${grade[1]} · ${nb} commande(s) tapée(s)`,
+    `📈 ${progression}`,
+    `🕒 ${date} · ${data.botPrivateMode ? '🔒 Privé' : '🔓 Public'}`,
+    `⏱️ En ligne depuis ${dureeLisible(process.uptime())}`,
+    `🎭 _${alea(HUMEURS_BOT)}_`
+  ];
+}
+
+// Corps d'une catégorie, dans le niveau de détail demandé
+function rendreCategorie(cat, niveau) {
+  const lignes = [];
+  let groupe = null;
+  for (const c of cat.cmds) {
+    if (c.groupe && c.groupe !== groupe) { lignes.push(`\n*${c.groupe}*`); groupe = c.groupe; }
+    const nomCmd = `*${afficherNomCommande(c)}*${c.args ? ` ${c.args}` : ''}`;
+    if (niveau === 'complet') lignes.push(`▫️ ${nomCmd}${c.owner ? ' 👑' : ''}\n   ↳ ${c.desc}`);
+    else if (niveau === 'court') lignes.push(`▫️ ${nomCmd} — ${c.desc}`);
+    else lignes.push(`▫️ *${afficherNomCommande(c)}*`);
+  }
+  return lignes.join('\n');
+}
+
+function legendeAccueil(nom, jid) {
+  const blocs = CATEGORIES_MENU.map((cat, i) =>
+    `${NUM_EMOJIS[i]} ${cat.emoji} *${cat.titre}* · ${cat.cmds.length} cmd\n   ↳ ${DESC_CATEGORIES[cat.id]}`
+  ).join('\n\n');
+  return tenirDansLimite([
+    boiteMenu('⚡ *TITAN BOT SYSTEM* ⚡', lignesProfil(nom, jid)),
+    '',
+    '📂 *MENU PRINCIPAL*',
+    blocs,
+    '',
+    '💡 Tape *.menu 1*, *.menu 2* ou *.menu 3* pour ouvrir une catégorie',
+    `✨ Astuce : ${alea(ASTUCES_MENU)}`
+  ].join('\n'));
+}
+
+function legendeCategorie(i, nom) {
   const cat = CATEGORIES_MENU[i];
   const prev = ((i - 1 + CATEGORIES_MENU.length) % CATEGORIES_MENU.length) + 1;
   const next = ((i + 1) % CATEGORIES_MENU.length) + 1;
-  const ent = enTete(`${cat.emoji} *${cat.titre.toUpperCase()}*`, [cat.note || `${cat.cmds.length} commande(s)`]);
-  return `${ent}\n${corpsCategorie(cat)}${legendeBadges(cat.cmds)}\n\n↩️ *.menu* : accueil • ◀️ *.menu ${prev}* • ▶️ *.menu ${next}*`;
+  const entete = boiteMenu(`${cat.emoji} *${cat.titre.toUpperCase()}*`, [
+    `👋 ${nom} · ${cat.cmds.length} commande(s)`,
+    cat.note ? `⚠️ ${cat.note}` : `🕒 ${heureLocale().date}`
+  ]);
+  const pied = `↩️ *.menu* accueil · ◀️ *.menu ${prev}* · ▶️ *.menu ${next}*`;
+  // Le plus de détails possible : on descend d'un niveau seulement si le texte ne tient pas
+  for (const niveau of ['complet', 'court', 'noms']) {
+    const texte = [entete, '', rendreCategorie(cat, niveau), legendeBadges(cat.cmds), '', pied].join('\n');
+    if (texte.length <= LIMITE_LEGENDE) return texte;
+  }
+  return tenirDansLimite([entete, '', rendreCategorie(cat, 'noms'), '', pied].join('\n'));
 }
 
-function menuTout(nom) {
-  const blocs = CATEGORIES_MENU.map((cat, i) => `${NUM_EMOJIS[i] || `${i + 1}.`} ${cat.emoji} *${cat.titre.toUpperCase()}*${cat.note ? `\n_${cat.note}_` : ''}\n${corpsCategorie(cat)}`);
-  const tous = CATEGORIES_MENU.reduce((acc, c) => acc.concat(c.cmds), []);
-  return `${menuHub(nom).split('\n\n📂')[0]}\n\n${blocs.join('\n\n')}${legendeBadges(tous)}\n\n↩️ *.menu* : accueil`;
+function legendeTout(nom) {
+  const entete = boiteMenu('📚 *TOUTES LES COMMANDES*', [
+    `👋 ${nom} · ${nbCommandes()} commande(s)`,
+    `🕒 ${heureLocale().date}`
+  ]);
+  const blocs = CATEGORIES_MENU.map((cat, i) =>
+    `${NUM_EMOJIS[i]} ${cat.emoji} *${cat.titre.toUpperCase()}*\n${rendreCategorie(cat, 'noms')}`
+  ).join('\n\n');
+  return tenirDansLimite([entete, '', blocs, '', '↩️ *.menu* : accueil'].join('\n'));
 }
 
 function menuCommande(cat, c) {
@@ -1173,22 +1318,22 @@ function menuCommande(cat, c) {
 }
 
 // Retourne { texte, cat } : cat = numéro de la catégorie (0, 1, 2…) ou null pour l'accueil
-function construireMenu(texte, nom) {
+function construireMenu(texte, nom, jid) {
   const m = (texte || '').trim().toLowerCase().match(MENU_REGEX);
   if (!m) return null;
   const arg = normaliserTexte(m[2] || m[3] || '');
 
-  if (!arg) return { texte: menuHub(nom), cat: null };
-  if (['all', 'tout', 'tous', 'full'].includes(arg)) return { texte: menuTout(nom), cat: null };
+  if (!arg) return { texte: legendeAccueil(nom, jid), cat: null };
+  if (['all', 'tout', 'tous', 'full'].includes(arg)) return { texte: legendeTout(nom), cat: null };
 
   if (/^\d+$/.test(arg)) {
     const i = parseInt(arg, 10) - 1;
-    if (i >= 0 && i < CATEGORIES_MENU.length) return { texte: menuCategorie(i), cat: i };
-    return { texte: `❓ La catégorie *${arg}* n'existe pas.\n\n${menuHub(nom)}`, cat: null };
+    if (i >= 0 && i < CATEGORIES_MENU.length) return { texte: legendeCategorie(i, nom), cat: i };
+    return { texte: `❓ La catégorie *${arg}* n'existe pas.\n\n${legendeAccueil(nom, jid)}`, cat: null };
   }
 
   const iCat = CATEGORIES_MENU.findIndex(c => normaliserTexte(c.id) === arg || (arg.length >= 3 && normaliserTexte(c.titre).includes(arg)));
-  if (iCat >= 0) return { texte: menuCategorie(iCat), cat: iCat };
+  if (iCat >= 0) return { texte: legendeCategorie(iCat, nom), cat: iCat };
 
   const sansPoint = arg.replace(/^\./, '');
   for (let ci = 0; ci < CATEGORIES_MENU.length; ci++) {
@@ -1199,27 +1344,27 @@ function construireMenu(texte, nom) {
       }
     }
   }
-  return { texte: `❓ Je ne trouve ni catégorie ni commande « ${arg} ».\n\n${menuHub(nom)}`, cat: null };
+  return { texte: `❓ Je ne trouve ni catégorie ni commande « ${arg} ».\n\n${legendeAccueil(nom, jid)}`, cat: null };
 }
 
-// 🎬 Vidéo du menu (fichier media/menu.mp4) : envoyée pour l'accueil et « menu all »
-const MENU_VIDEO = (() => {
-  try {
-    const chemin = path.join(__dirname, 'media', 'menu.mp4');
-    return fs.existsSync(chemin) ? fs.readFileSync(chemin) : null;
-  } catch (e) { return null; }
-})();
-
-// 📜 Envoie le menu : vidéo pour l'accueil et « menu all », texte pour les sous-menus
+// 🖼️ Envoi du menu en UN SEUL message : image ou vidéo, avec le texte dynamique en légende
 async function envoyerMenu(sock, remoteJid, msg, resultat) {
-  const texte = resultat.texte;
-  if (typeof resultat.cat === 'number' || !MENU_VIDEO) {
-    return envoyerAvecDelai(sock, remoteJid, { text: texte }, { quoted: msg }, 'menu');
+  let media = null;
+  if (typeof resultat.cat === 'number') {
+    const img = choisirImageMenu(resultat.cat);
+    if (img) media = { type: 'image', buffer: img };
+  } else if (MENU_VIDEO) {
+    media = { type: 'video', buffer: MENU_VIDEO };
+  } else if (MENU_IMAGES.length) {
+    media = { type: 'image', buffer: alea(MENU_IMAGES) };
   }
-  // La légende WhatsApp accepte ~1000 caractères : au-delà, le texte complet part juste après
-  const court = texte.length <= 1000;
-  await envoyerAvecDelai(sock, remoteJid, { video: MENU_VIDEO, mimetype: 'video/mp4', caption: court ? texte : '⚡ *TITAN BOT* ⚡' }, { quoted: msg }, 'media');
-  if (!court) return envoyerAvecDelai(sock, remoteJid, { text: texte }, {}, 'media');
+  if (!media) return envoyerAvecDelai(sock, remoteJid, { text: resultat.texte }, { quoted: msg }, 'menu');
+
+  const legende = tenirDansLimite(resultat.texte);
+  const contenu = media.type === 'video'
+    ? { video: media.buffer, caption: legende }
+    : { image: media.buffer, caption: legende };
+  return envoyerAvecDelai(sock, remoteJid, contenu, { quoted: msg }, 'media');
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1228,9 +1373,21 @@ async function envoyerMenu(sock, remoteJid, msg, resultat) {
 function trouverCible(msg, remoteJid, repliPrive = false, autreJid = null) {
   const ctx = msg.message?.extendedTextMessage?.contextInfo;
   if (ctx?.mentionedJid?.length) return ctx.mentionedJid[0];
-  if (ctx?.quotedMessage && ctx.participant) return ctx.participant;
+  // En groupe seulement : en privé, le « participant » d'une réponse peut être le compte du bot
+  if (ctx?.quotedMessage && ctx.participant && remoteJid.endsWith('@g.us')) return ctx.participant;
   if (repliPrive && !remoteJid.endsWith('@g.us')) return autreJid || remoteJid;
   return null;
+}
+
+// 🎯 Cible des commandes « fiche sur quelqu'un » (cerveau, balance, pp, hack, love) :
+// - mention ou message cité si présent ;
+// - en groupe : la personne qui a tapé la commande ;
+// - en privé : TOUJOURS la personne avec qui le bot discute (jamais le compte du bot),
+//   que la commande soit tapée par le bot ou par l'interlocuteur.
+function cibleCommande(msg, sock, remoteJid, senderJid) {
+  const mention = trouverCible(msg, remoteJid, false);
+  if (mention) return mention;
+  return remoteJid.endsWith('@g.us') ? senderJid : remoteJid;
 }
 
 // 🙋 Qui a lancé la commande : en groupe = l'expéditeur ; en privé = moi (si je l'ai envoyée) ou la personne du chat
@@ -1305,19 +1462,32 @@ const COMMENTAIRES_DIVORCE = [
 async function commandeMariage(sock, msg, remoteJid, senderJid) {
   const rep = (texte, mentions = []) => envoyerAvecDelai(sock, remoteJid, { text: texte, mentions }, { quoted: msg }, 'texte');
   const botNumber = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-  const cible = trouverCible(msg, remoteJid, true, autreDe(msg, sock, remoteJid));
 
-  if (!cible) return rep("⚠️ Mentionne (ou réponds au message de) la personne que tu veux épouser !\nExemple : *.mariage @personne*");
-  if (cible === senderJid) return rep("⚠️ Tu ne peux pas t'épouser toi-même ! L'amour de soi c'est bien, mais là c'est trop 🤣");
-  if (cible === botNumber) return rep("🤖💔 Désolé, je suis déjà marié à mon code source. Dur dur la vie de bot…");
-
-  const mien = mariages.get(senderJid);
-  if (mien) {
-    return rep(`🚫 *BIGAMIE DÉTECTÉE !* 🚨\n\nTu es déjà marié(e) avec ${nomAffiche(mien.conjoint)} depuis ${dureeLisible((Date.now() - mien.ts) / 1000)} !\nFais d'abord *.divorce* si tu veux changer 😏`, [mien.conjoint]);
+  // Deux personnes mentionnées : on les marie entre elles (l'auteur n'est pas ajouté)
+  // Une seule mention (ou message cité) : l'auteur et la personne visée
+  const mentionnes = [...new Set(msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [])]
+    .filter(j => j !== botNumber);
+  let a;
+  let b;
+  if (mentionnes.length >= 2) {
+    a = mentionnes[0];
+    b = mentionnes[1];
+  } else {
+    a = senderJid;
+    b = trouverCible(msg, remoteJid, true, autreDe(msg, sock, remoteJid));
   }
-  const sien = mariages.get(cible);
+
+  if (!b) return rep("⚠️ Mentionne une ou deux personnes !\nExemple : *.mariage @A @B* (ou *.mariage @personne* pour te marier avec elle)");
+  if (b === a) return rep("⚠️ Tu ne peux pas marier quelqu'un avec lui-même ! L'amour de soi c'est bien, mais là c'est trop 🤣");
+  if (b === botNumber || a === botNumber) return rep("🤖💔 Désolé, je suis déjà marié à mon code source. Dur dur la vie de bot…");
+
+  const mien = mariages.get(a);
+  if (mien) {
+    return rep(`🚫 *BIGAMIE DÉTECTÉE !* 🚨\n\n${nomAffiche(a)} est déjà marié(e) avec ${nomAffiche(mien.conjoint)} depuis ${dureeLisible((Date.now() - mien.ts) / 1000)} !\nFaites d'abord *.divorce* si vous voulez changer 😏`, [a, mien.conjoint]);
+  }
+  const sien = mariages.get(b);
   if (sien) {
-    return rep(`🚫 ${nomAffiche(cible)} est déjà marié(e) avec ${nomAffiche(sien.conjoint)} !\nOn ne touche pas au mari/à la femme des autres 😤`, [cible, sien.conjoint]);
+    return rep(`🚫 ${nomAffiche(b)} est déjà marié(e) avec ${nomAffiche(sien.conjoint)} !\nOn ne touche pas au mari/à la femme des autres 😤`, [b, sien.conjoint]);
   }
 
   const score = entierAlea(50, 100);
@@ -1326,11 +1496,11 @@ async function commandeMariage(sock, msg, remoteJid, senderJid) {
   const lieu = alea(LIEUX_MARIAGE);
   const { date } = heureLocale();
 
-  mariages.set(senderJid, { conjoint: cible, ts: Date.now(), lieu });
-  mariages.set(cible, { conjoint: senderJid, ts: Date.now(), lieu });
+  mariages.set(a, { conjoint: b, ts: Date.now(), lieu });
+  mariages.set(b, { conjoint: a, ts: Date.now(), lieu });
 
-  const nomA = nomAffiche(senderJid);
-  const nomB = nomAffiche(cible);
+  const nomA = nomAffiche(a);
+  const nomB = nomAffiche(b);
   const texte =
 `💍━━━━━━━━━━━━━━━━💍
 📜 *CERTIFICAT DE MARIAGE* 📜
@@ -1358,7 +1528,7 @@ async function commandeMariage(sock, msg, remoteJid, senderJid) {
 
 🎉 _Vous pouvez embrasser… le bot en témoin !_ 🥂
 _Pour divorcer : *.divorce*_`;
-  return rep(texte, [senderJid, cible]);
+  return rep(texte, [a, b]);
 }
 
 async function commandeDivorce(sock, msg, remoteJid, senderJid) {
@@ -1391,6 +1561,339 @@ async function commandeDivorce(sock, msg, remoteJid, senderJid) {
 
 🔓 _Vous êtes tous les deux de nouveau célibataires !_`;
   return rep(texte, [senderJid, m.conjoint]);
+}
+
+// ═══════════════════════════════════════════════════════════
+// 😈 HACK (animation par modification d'un seul message + rapport final)
+// ═══════════════════════════════════════════════════════════
+const ETAPES_HACK = [
+  [8, "🔍 Scan des ports ouverts..."],
+  [20, "🧱 Contournement du pare-feu..."],
+  [33, "💉 Injection du script dans le téléphone..."],
+  [47, "🌐 Interception de l'adresse IP..."],
+  [60, "📱 Lecture des messages « Salut ça va ? » restés sans réponse..."],
+  [74, "🖼️ Téléchargement de la galerie (97% de selfies, 3% de bouffe)..."],
+  [88, "🔐 Déchiffrement du mot de passe..."],
+  [100, "✅ ACCÈS OBTENU !"]
+];
+const APPAREILS_HACK = [
+  "Téléphone à l'écran fissuré depuis 2019 📱", "Un Tecno qui chauffe plus qu'un fer à repasser 🔥",
+  "Un iPhone… prêté par un ami 🍏", "Un Infinix avec 3 Go de mémoire pleine 🗂️",
+  "Un Samsung qui redémarre tout seul 🔄", "Une calculatrice qui se prend pour un smartphone 🧮"
+];
+const POSITIONS_HACK = [
+  "dans son lit, alors qu'il est midi 🛏️", "devant le frigo, pour la 5e fois 🧊", "aux toilettes avec son téléphone 🚽",
+  "au maquis, en train de commander 🍗", "dans le groupe, à lire sans répondre 👀", "en train de chercher son chargeur 🔌"
+];
+const RECHERCHES_HACK = [
+  "« comment répondre sans avoir l'air d'avoir lu »", "« recette alloco sans huile »", "« pourquoi mon crush me laisse en vu »",
+  "« comment gagner de l'argent sans travailler »", "« est-ce que les poissons dorment ? »", "« comment effacer l'historique rapidement »"
+];
+const MOTS_DE_PASSE_HACK = [
+  "123456 (sérieusement ?) 🤦", "motdepasse 🙃", "le prénom de son crush ❤️", "azerty 🎹",
+  "ilovemyself 😎", "0000, comme son solde 💸"
+];
+const DERNIERS_MESSAGES_HACK = [
+  "« je suis en route » (il est encore au lit) 🛌", "« je te rappelle » (jamais) 📞", "« c'est qui ? » à sa propre maman 🤣",
+  "« envoie le numéro » (il l'a déjà) 🤡", "« je suis déjà arrivé » (il n'est pas sorti) 🚪"
+];
+
+async function commandeHack(sock, msg, remoteJid, senderJid, isGroup, cleanText) {
+  const rep = (texte, mentions = []) => envoyerAvecDelai(sock, remoteJid, { text: texte, mentions }, { quoted: msg }, 'texte');
+  const botNumber = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+  const args = cleanText.replace(/^\.hack\s*/i, '').replace(/@\d+/g, '').trim();
+  // En groupe : mention ou message cité. En privé : la personne avec qui le bot discute (jamais le bot).
+  const cibleJid = isGroup ? trouverCible(msg, remoteJid, false) : remoteJid;
+
+  if (!cibleJid && !args) {
+    return rep("⚠️ Qui veux-tu hacker ?\n• Dans un groupe : *.hack @personne* (ou réponds à son message)\n• En privé : *.hack* (je hacke la personne avec qui je discute)\n• Ou un nom : *.hack Kevin*");
+  }
+  if (cibleJid === botNumber) {
+    return rep("😏 Me hacker, moi ? Mon pare-feu c'est ma mauvaise humeur. Essaie quelqu'un d'autre !");
+  }
+
+  // Nom affiché : mention en groupe, nom WhatsApp en privé, ou le texte tapé
+  let nom;
+  let mentions = [];
+  if (cibleJid && isGroup) {
+    nom = nomAffiche(cibleJid);
+    mentions = [cibleJid];
+  } else if (cibleJid) {
+    nom = profilsJoueurs[cibleJid] || (!msg.key.fromMe && msg.pushName) || args || `+${cibleJid.split('@')[0]}`;
+  } else {
+    nom = args;
+  }
+
+  return enFile(remoteJid, async () => {
+    try {
+      await passerEnLigne(sock);
+      try { await sock.readMessages([msg.key]); } catch (e) {}
+
+      const journal = [];
+      const frame = (p) => `💻 *TITAN HACK v2.0* 💻\n🎯 Cible : ${nom}\n━━━━━━━━━━━━━━━\n${barre(p)}\n${journal.slice(-4).join('\n')}`;
+
+      await sock.sendPresenceUpdate('composing', remoteJid);
+      await sleep(1500);
+      const premier = await sock.sendMessage(remoteJid, { text: frame(0) + '\n🚀 Lancement du piratage...', mentions }, { quoted: msg });
+      if (premier?.key?.id) processedMessages.add(premier.key.id);
+      const cle = premier?.key;
+      let editionOk = !!cle;
+
+      for (const [p, ligne] of ETAPES_HACK) {
+        await sleep(2600);
+        journal.push(ligne);
+        if (editionOk) {
+          try {
+            await sock.sendMessage(remoteJid, { text: frame(p), edit: cle, mentions });
+          } catch (e) {
+            editionOk = false; // la modification a échoué : on enverra juste le rapport final
+          }
+        }
+      }
+
+      await sleep(1800);
+      const ip = `${alea(['41', '154', '196', '197'])}.${entierAlea(1, 254)}.${entierAlea(1, 254)}.${entierAlea(1, 254)}`;
+      const rapport =
+`🏴‍☠️ *PIRATAGE RÉUSSI : ${nom} !* 😈
+━━━━━━━━━━━━━━━
+🌐 *IP :* ${ip} (inventée, bien sûr)
+📱 *Appareil :* ${alea(APPAREILS_HACK)}
+🔋 *Batterie :* ${entierAlea(1, 9)}% (et il/elle cherche son chargeur)
+📍 *Position :* ${alea(POSITIONS_HACK)}
+🔍 *Dernière recherche :* ${alea(RECHERCHES_HACK)}
+🔑 *Mot de passe :* ${alea(MOTS_DE_PASSE_HACK)}
+💬 *Dernier message envoyé :* ${alea(DERNIERS_MESSAGES_HACK)}
+🕵️ *Niveau de danger :* ${entierAlea(1, 100)}/100
+━━━━━━━━━━━━━━━
+😂 *Amusement à part c'est réel hyn* 🥲`;
+      const final = await sock.sendMessage(remoteJid, { text: rapport, mentions }, { quoted: msg });
+      if (final?.key?.id) processedMessages.add(final.key.id);
+    } catch (err) {
+      console.error('⚠️ Erreur hack :', err);
+    } finally {
+      arreterComposing(sock, remoteJid);
+    }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+// 💘 DRAGUE : plusieurs phrases, avec un délai entre chaque envoi (anti-spam)
+// ═══════════════════════════════════════════════════════════
+const draguesEnCours = new Set();
+
+async function commandeDrague(sock, msg, remoteJid, senderJid, cleanText) {
+  const rep = (texte) => envoyerAvecDelai(sock, remoteJid, { text: texte }, { quoted: msg }, 'texte');
+  const cibleJid = trouverCible(msg, remoteJid, true, autreDe(msg, sock, remoteJid));
+  if (!cibleJid) {
+    return rep("⚠️ Mentionne la personne à draguer !\nExemple : *drague @personne* (ou *drague @personne 3* pour 3 phrases)");
+  }
+  if (draguesEnCours.has(remoteJid)) {
+    return rep("⏳ Une séance de drague est déjà en cours ici, patience !");
+  }
+
+  // On retire d'abord les mentions (@2250...) pour ne lire que le nombre de phrases demandé
+  const mNombre = cleanText.replace(/@\d+/g, '').trim().match(/\(?\s*(\d+)\s*\)?\s*$/);
+  const nb = Math.max(1, Math.min(10, mNombre ? parseInt(mNombre[1], 10) : 3));
+  const tag = `@${cibleJid.split('@')[0]}`;
+  const phrases = melanger(LISTE_DRAGUES).slice(0, nb).map(p => p.replace(/@tag/g, tag));
+
+  draguesEnCours.add(remoteJid);
+  return enFile(remoteJid, async () => {
+    try {
+      await passerEnLigne(sock);
+      try { await sock.readMessages([msg.key]); } catch (e) {}
+      for (let i = 0; i < phrases.length; i++) {
+        await sock.sendPresenceUpdate('composing', remoteJid);
+        await sleep(250);
+        const options = i === 0 ? sansCitationSupprimee({ quoted: msg }) : {};
+        const envoye = await sock.sendMessage(remoteJid, { text: phrases[i], mentions: [cibleJid] }, options);
+        if (envoye?.key?.id) processedMessages.add(envoye.key.id);
+        try { await sock.sendPresenceUpdate('paused', remoteJid); } catch (e) {}
+        // ⚡ Mode rapide : environ 1 seconde entre deux messages
+        if (i < phrases.length - 1) await sleep(Math.max(1000, DELAI_DRAGUE_MS));
+      }
+    } catch (err) {
+      console.error('⚠️ Erreur drague :', err);
+    } finally {
+      draguesEnCours.delete(remoteJid);
+      arreterComposing(sock, remoteJid);
+    }
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+// 📖 DICTIONNAIRE EN LIGNE (Wiktionnaire français, puis dictionaryapi.dev)
+// ═══════════════════════════════════════════════════════════
+function nettoyerHtml(s) {
+  return String(s || '')
+    .replace(/<[^>]*>/g, '')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ').trim();
+}
+const couper = (s, n) => (s.length > n ? s.slice(0, n - 1).trim() + '…' : s);
+
+async function definitionWiktionnaire(mot) {
+  const url = `https://fr.wiktionary.org/api/rest_v1/page/definition/${encodeURIComponent(mot)}`;
+  const r = await axios.get(url, { timeout: 12000, headers: { 'User-Agent': UA, 'Accept': 'application/json' } });
+  const blocs = r.data && r.data.fr;
+  if (!Array.isArray(blocs) || !blocs.length) return null;
+  const sens = [];
+  for (const b of blocs) {
+    for (const d of (b.definitions || [])) {
+      const def = nettoyerHtml(d.definition);
+      if (!def) continue;
+      const ex = Array.isArray(d.examples) && d.examples.length ? nettoyerHtml(d.examples[0]) : '';
+      sens.push({ nature: nettoyerHtml(b.partOfSpeech), def, ex });
+    }
+  }
+  return sens.length ? { mot, source: 'Wiktionnaire', sens } : null;
+}
+
+async function definitionDictionaryApi(mot) {
+  const url = `https://api.dictionaryapi.dev/api/v2/entries/fr/${encodeURIComponent(mot)}`;
+  const r = await axios.get(url, { timeout: 12000, headers: { 'User-Agent': UA } });
+  if (!Array.isArray(r.data) || !r.data.length) return null;
+  const sens = [];
+  let phon = '';
+  for (const e of r.data) {
+    phon = phon || e.phonetic || '';
+    for (const m of (e.meanings || [])) {
+      for (const d of (m.definitions || [])) {
+        sens.push({ nature: m.partOfSpeech || '', def: nettoyerHtml(d.definition), ex: nettoyerHtml(d.example) });
+      }
+    }
+  }
+  return sens.length ? { mot, source: 'dictionaryapi.dev', phon, sens } : null;
+}
+
+async function commandeDico(sock, msg, remoteJid, cleanText) {
+  const rep = (texte) => envoyerAvecDelai(sock, remoteJid, { text: texte }, { quoted: msg }, 'texte');
+  let mot = cleanText.replace(/^\.(dico|def|dictionnaire)\s*/i, '').trim();
+  if (!mot) {
+    const cite = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+    mot = (cite?.conversation || cite?.extendedTextMessage?.text || '').trim();
+  }
+  mot = mot.split(/\s+/)[0] || '';
+  if (!mot) return rep("📖 Donne-moi un mot !\nExemple : *.dico courage*");
+  if (mot.length > 40) return rep("⚠️ Ce mot est trop long, essaie un seul mot à la fois.");
+
+  try { await sock.sendPresenceUpdate('composing', remoteJid); } catch (e) {}
+  let res = null;
+  for (const chercher of [definitionWiktionnaire, definitionDictionaryApi]) {
+    for (const variante of [...new Set([mot, mot.toLowerCase()])]) {
+      try { res = await chercher(variante); } catch (e) { res = null; }
+      if (res) break;
+    }
+    if (res) break;
+  }
+  if (!res) return rep(`😕 Je ne trouve pas la définition de « ${mot} ».\nVérifie l'orthographe, ou essaie le mot au singulier / à l'infinitif.`);
+
+  const lignes = [`📖 *${res.mot.toUpperCase()}*${res.phon ? `  _${res.phon}_` : ''}`, '━━━━━━━━━━━━━━━'];
+  res.sens.slice(0, 4).forEach((s, i) => {
+    lignes.push(`*${i + 1}.* ${s.nature ? `_(${s.nature})_ ` : ''}${couper(s.def, 260)}`);
+    if (s.ex) lignes.push(`   ↳ _« ${couper(s.ex, 160)} »_`);
+  });
+  lignes.push('━━━━━━━━━━━━━━━', `🌐 Source : ${res.source}`);
+  return rep(lignes.join('\n'));
+}
+
+// 🎈 ═══════════════════════════════════════════════════════════
+// 🎈 GUMBALL DU JOUR (commande .gumball, groupe & privé)
+// ═══════════════════════════════════════════════════════════
+const GUMBALL_IMAGE = (() => {
+  try {
+    const chemin = path.join(__dirname, 'media', 'gumball.jpg');
+    return fs.existsSync(chemin) ? fs.readFileSync(chemin) : null;
+  } catch (e) { return null; }
+})();
+// 🎬 Vidéo de la commande .guerre (fichier media/guerre.mp4)
+const GUERRE_VIDEO = (() => {
+  try {
+    const chemin = path.join(__dirname, 'media', 'guerre.mp4');
+    return fs.existsSync(chemin) ? fs.readFileSync(chemin) : null;
+  } catch (e) { return null; }
+})();
+
+// 🎬 Vidéo spéciale « Yasmine » (fichier media/yasmine.mp4)
+const YASMINE_VIDEO = (() => {
+  try {
+    const chemin = path.join(__dirname, 'media', 'yasmine.mp4');
+    return fs.existsSync(chemin) ? fs.readFileSync(chemin) : null;
+  } catch (e) { return null; }
+})();
+
+// 🎈 Commentaire selon le Gumball choisi (1 à 16) : d'après l'expression du tableau
+const COMMENTAIRES_GUMBALL = {
+  1: "😳 Les yeux ronds et la bouche ouverte… t'as vu un fantôme, ou tu viens de réaliser le prix du pain ? 🍞",
+  2: "😳 Joues rouges et regard gêné… t'as fait quelque chose dont tu n'es pas trop fier(e) 🫣",
+  3: "😮‍💨 Bouche grande ouverte, yeux plissés… tu bâilles ou tu cries ? Dans les deux cas, va dormir 😴",
+  4: "😁 Grand sourire un peu forcé… t'as un plan dans la tête, toi. Je le sens 😏",
+  5: "😢 Les larmes aux yeux… même Gumball te comprend. Courage, ça va passer 🥲",
+  6: "😤 Tu cries sur tout le monde aujourd'hui ? Respire, le monde n'est pas contre toi 😠",
+  7: "😱 Yeux ronds et dents qui sortent… mode panique activé 😨",
+  8: "😱 Bouche grande ouverte, yeux écarquillés… t'as vu la facture d'électricité ? 💡",
+  9: "😭 Tu pleures à chaudes larmes… viens, on en parle. Je suis là 🫂",
+  10: "😬 Dents serrées, regard noir… tu tiens le coup ou tu fais semblant ? 😤",
+  11: "😵‍💫 Yeux qui louchent et langue dehors… t'es encore en mode « pas réveillé(e) » ? ☕",
+  12: "😖 Yeux fermés très fort… t'as mangé quelque chose de périmé ? 🤢",
+  13: "😠 Front froncé, mâchoire serrée… ne me dis pas qu'on t'a marché sur les pieds 😤",
+  14: "🤪 Cheveux en bataille et langue qui pend… c'est toi le plus fou du groupe 🤪",
+  15: "😒 Regard blasé… on a bien compris que t'es pas impressionné(e) 🙄",
+  16: "😪 Paupières lourdes… t'as besoin d'une sieste, et c'est pas une question ! 😴",
+};
+
+const gumballEnAttente = new Map();   // "chat|personne" -> date limite (10 min) pour répondre avec un numéro
+const cleGumball = (remoteJid, acteur) => `${remoteJid}|${acteur}`;
+
+async function commandeGumball(sock, msg, remoteJid, acteur) {
+  const texte = "Sélectionne ton Gumball d'aujourd'hui 👇\nRéponds avec son numéro (1 à 16) 😜";
+  const contenu = GUMBALL_IMAGE ? { image: GUMBALL_IMAGE, caption: texte } : { text: texte };
+  await envoyerAvecDelai(sock, remoteJid, contenu, { quoted: msg }, 'media');
+  gumballEnAttente.set(cleGumball(remoteJid, acteur), Date.now() + 10 * 60 * 1000);
+}
+
+// Renvoie true si le message était un numéro de Gumball (1 à 16) attendu de cette personne
+async function gererNumeroGumball(sock, msg, remoteJid, acteur, cleanText) {
+  const cle = cleGumball(remoteJid, acteur);
+  const expire = gumballEnAttente.get(cle);
+  if (!expire) return false;
+  if (expire < Date.now()) { gumballEnAttente.delete(cle); return false; }
+  const saisie = cleanText.trim();
+  if (!/^\d{1,2}$/.test(saisie)) return false;
+  const numero = parseInt(saisie, 10);
+  if (numero < 1 || numero > 16) return false;
+  gumballEnAttente.delete(cle);
+  await envoyerAvecDelai(sock, remoteJid, { text: `🎈 *Gumball n°${numero}*\n${COMMENTAIRES_GUMBALL[numero]}` }, { quoted: msg }, 'texte');
+  return true;
+}
+
+// 👋 ACCUEIL AUTOMATIQUE : premier message d'une personne en privé (une fois par jour)
+// → « Salut » puis la photo Gumball avec la question ; les deux envois se suivent sans interruption
+const DERNIER_ACCUEIL = new Map();   // jid -> date du dernier accueil
+const DELAI_ACCUEIL_MS = 24 * 60 * 60 * 1000;
+
+function accueilAutomatique(sock, msg, jid) {
+  if (Date.now() - (DERNIER_ACCUEIL.get(jid) || 0) < DELAI_ACCUEIL_MS) return;
+  DERNIER_ACCUEIL.set(jid, Date.now());
+
+  const nom = profilsJoueurs[jid] || msg.pushName || '';
+  const salut = `Salut${nom ? ` *${nom}*` : ''} 👋 Moi c'est *TITAN*, ton bot 😎\nTape *.menu* pour découvrir tout ce que je sais faire !`;
+  const questionGumball = "🎈 *Quel Gumball es-tu aujourd'hui ?*\nRéponds avec son numéro (1 à 16) 😜";
+  const gumball = GUMBALL_IMAGE ? { image: GUMBALL_IMAGE, caption: questionGumball } : { text: questionGumball };
+
+  commencerEnvoi(sock, jid);
+  enFile(jid, async () => {
+    try {
+      await envoyerUnPas(sock, jid, { text: salut }, {}, 'texte');
+      await envoyerUnPas(sock, jid, gumball, {}, 'media');
+      gumballEnAttente.set(cleGumball(jid, jid), Date.now() + 10 * 60 * 1000);
+    } catch (err) {
+      console.error('⚠️ Accueil automatique :', err);
+    } finally {
+      finirEnvoi(sock, jid);
+    }
+  });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1473,7 +1976,7 @@ async function commandeImage(sock, msg, remoteJid, cleanText, genererSeulement) 
   }
   q = q.slice(0, 200);
 
-  try { await sock.sendPresenceUpdate('composing', remoteJid); } catch (e) {}
+  commencerEnvoi(sock, remoteJid);
   let buffer = null;
   let source = '';
   const etapes = genererSeulement
@@ -1490,6 +1993,7 @@ async function commandeImage(sock, msg, remoteJid, cleanText, genererSeulement) 
     if (buffer) { source = nomSource; break; }
   }
 
+  finirEnvoi(sock, remoteJid);
   if (!buffer) return rep(`Bon toi mm là c'est quelle recherche ça là genre tu me vois en quoi mm 🤦🏼‍♀️ « ${q} ». Faut réessayer plus tard vilain là 💅`);
   return envoyerAvecDelai(sock, remoteJid, { image: buffer, caption: `🔍 *${q}*\n${source}` }, { quoted: msg }, 'media');
 }
@@ -1514,20 +2018,43 @@ async function commande8Ball(sock, msg, remoteJid, cleanText) {
   return envoyerAvecDelai(sock, remoteJid, { text: `🎱 *BOULE MAGIQUE*\n\n❓ _${question}_\n\n🔮 ${alea(REPONSES_8BALL)}` }, { quoted: msg }, 'texte');
 }
 
+// 💘 .love : en groupe, avec une ou deux mentions (ou un message cité) ; en privé, sur la personne du chat.
+// Le compte du bot n'est jamais évalué.
 async function commandeLove(sock, msg, remoteJid, senderJid) {
   const ctx = msg.message?.extendedTextMessage?.contextInfo;
   const mentions = ctx?.mentionedJid || [];
-  let a; let b;
-  const acteur = acteurDe(msg, sock, remoteJid, senderJid);
+  const botNumber = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+  const estGroupe = remoteJid.endsWith('@g.us');
+
+  let a = null;
+  let b = null;
   if (mentions.length >= 2) { a = mentions[0]; b = mentions[1]; }
-  else if (mentions.length === 1) { a = acteur; b = mentions[0]; }
-  else if (ctx?.quotedMessage && ctx.participant) { a = acteur; b = ctx.participant; }
-  else if (!remoteJid.endsWith('@g.us')) { a = acteur; b = autreDe(msg, sock, remoteJid); }
-  if (!a || !b) {
+  else if (mentions.length === 1) { a = estGroupe ? senderJid : remoteJid; b = mentions[0]; }
+  else if (ctx?.quotedMessage && ctx.participant) { a = estGroupe ? senderJid : remoteJid; b = ctx.participant; }
+  else if (!estGroupe) { a = remoteJid; }
+  if (b === botNumber) b = null;
+
+  if (!a) {
     return envoyerAvecDelai(sock, remoteJid, { text: "⚠️ Mentionne une ou deux personnes !\nExemple : *.love @personne* ou *.love @A @B*" }, { quoted: msg }, 'texte');
   }
+
   const score = entierAlea(0, 100);
   const tier = score >= 80 ? 'parfait' : (score >= 45 ? 'moyen' : 'faible');
+
+  // Une seule personne (chat privé ou une seule cible) : on évalue la personne seule
+  if (!b || b === a) {
+    const texte =
+`💘 *TEST D'AMOUR* 💘
+━━━━━━━━━━━━━━━
+👤 ${nomAffiche(a)}
+
+💖 ${barre(score)}
+💬 ${alea(COMMENTAIRES_LOVE[tier])}
+
+💡 *Conseil :* ${alea(CONSEILS_LOVE)}`;
+    return envoyerAvecDelai(sock, remoteJid, { text: texte, mentions: [a] }, { quoted: msg }, 'texte');
+  }
+
   const texte =
 `💘 *TEST D'AMOUR* 💘
 ━━━━━━━━━━━━━━━
@@ -1548,15 +2075,14 @@ async function commandeMensonge(sock, msg, remoteJid, cleanText) {
   return envoyerAvecDelai(sock, remoteJid, { text: texte }, { quoted: msg }, 'texte');
 }
 
-async function commandeCerveau(sock, msg, remoteJid, senderJid) {
-  const cible = trouverCible(msg, remoteJid, false) || senderJid;
+// La cible (cible) est fournie par l'appelant : cibleCommande() (groupe = auteur/mention, privé = interlocuteur)
+async function commandeCerveau(sock, msg, remoteJid, cible) {
   const lignes = DONNEES_CERVEAU.map(l => `${l.trim()}\n   ${barre(entierAlea(0, 100))}`);
   const texte = `🧠 *SCANNER CÉRÉBRAL* 🧠\n👤 ${nomAffiche(cible)}\n━━━━━━━━━━━━━━━\n${lignes.join('\n')}\n━━━━━━━━━━━━━━━\n🩺 *Diagnostic :* ${alea(COMMENTAIRES_CERVEAU)}`;
   return envoyerAvecDelai(sock, remoteJid, { text: texte, mentions: [cible] }, { quoted: msg }, 'texte');
 }
 
-async function commandeBalance(sock, msg, remoteJid, senderJid) {
-  const cible = trouverCible(msg, remoteJid, false) || senderJid;
+async function commandeBalance(sock, msg, remoteJid, cible) {
   const ange = entierAlea(0, 100);
   const verdict = ange >= 67 ? alea(VERDICTS_BALANCE.ange) : (ange >= 34 ? alea(VERDICTS_BALANCE.mixte) : alea(VERDICTS_BALANCE.demon));
   const texte = `⚖️ *BALANCE ANGE / DÉMON* ⚖️\n👤 ${nomAffiche(cible)}\n━━━━━━━━━━━━━━━\n😇 Ange : ${barre(ange)}\n😈 Démon : ${barre(100 - ange)}\n━━━━━━━━━━━━━━━\n💬 ${verdict}`;
@@ -1582,8 +2108,25 @@ async function commandeFiche(sock, msg, remoteJid, senderJid) {
 }
 
 let sock = null;
+let reconnectTimer = null;
+let demarrageEnCours = false;
+
+function programmerRedemarrage(delaiMs, raison) {
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  console.log(`🔄 Redémarrage programmé dans ${Math.round(delaiMs / 1000)} s (${raison}).`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    startBot().catch(e => console.error('❌ Erreur redémarrage :', e));
+  }, delaiMs);
+}
 
 async function startBot() {
+  if (demarrageEnCours) {
+    console.log('ℹ️ Démarrage déjà en cours, tentative ignorée.');
+    return;
+  }
+  demarrageEnCours = true;
+  try {
   if (sock) {
     try {
       sock.ev.removeAllListeners();
@@ -1619,7 +2162,7 @@ async function startBot() {
     if (g.id && g.subject) groupesConnus.set(g.id, { nom: g.subject, expire: Date.now() + DUREE_CACHE_GROUPE_MS });
   }));
 
-  // 👁️ Vue unique : listener dédié[span_4](start_span)[span_4](end_span)
+  // 👁️ Vue unique : listener dédié
   installerVueUnique(sock);
 
   // 🔄 Reconnexion automatique (voir plus bas)
@@ -1631,24 +2174,30 @@ async function startBot() {
       const errorMessage = lastDisconnect?.error?.message || "";
       console.log(`❌ Connexion fermée. Code : ${statusCode} | Erreur : ${errorMessage}`);
 
+      // Désactive l'ancien socket avant de nettoyer ou relancer sa session.
+      try {
+        sock.ev.removeAllListeners();
+        sock.ws.close();
+      } catch (e) {}
+
       if (statusCode === DisconnectReason.loggedOut) {
-        console.log("❌ Appareil déconnecté depuis WhatsApp. Nettoyage de la session...");
-        await clearSession();
-        console.log("🔄 Nouvelle tentative dans 5 secondes (nouveau code de jumelage)...");
-        setTimeout(() => startBot().catch(e => console.error('❌ Erreur redémarrage :', e)), 5000);
+        console.log("❌ Session WhatsApp déconnectée (loggedOut). Réinitialisation de la session locale...");
+        try {
+          // Retire le listener de sauvegarde de l'ancien socket avant de supprimer les fichiers.
+          await clearSession();
+        } catch (e) {
+          console.error('⚠️ Nettoyage de session impossible :', e?.message || e);
+        }
+        programmerRedemarrage(5000, 'nouveau jumelage nécessaire');
         return;
       }
 
-      // Après la saisie du code, WhatsApp coupe volontairement la connexion (code 515 "restart required").
-      // Il FAUT relancer le bot, sinon le jumelage n'est jamais terminé.
-      const dejaJumele = !!(sock && sock.authState && sock.authState.creds && sock.authState.creds.registered);
+      // Utilise l'état d'authentification capturé au démarrage : sock.authState n'est pas garanti par Baileys.
+      const dejaJumele = !!state.creds.registered;
       if (statusCode === DisconnectReason.restartRequired || dejaJumele) {
-        console.log("🔄 Reconnexion dans 3 secondes...");
-        setTimeout(() => startBot().catch(e => console.error('❌ Erreur redémarrage :', e)), 3000);
+        programmerRedemarrage(3000, 'reconnexion après fermeture');
       } else {
-        // Fermeture inattendue (ex : jumelage refusé ou coupé) : on relance pour ne pas rester bloqué
-        console.log("🔄 Fermeture inattendue, nouvelle tentative dans 10 secondes...");
-        setTimeout(() => startBot().catch(e => console.error('❌ Erreur redémarrage :', e)), 10000);
+        programmerRedemarrage(10000, 'connexion interrompue ou jumelage non terminé');
       }
     } else if (connection === 'open') {
       console.log('⚡ TITAN BOT PRÊT ET CONNECTÉ !');
@@ -1659,27 +2208,76 @@ async function startBot() {
     const rawNumber = process.env.PHONE_NUMBER || "225XXXXXXXXXX";
     const phoneNumber = rawNumber.replace(/[^0-9]/g, "");
     if (!process.env.PHONE_NUMBER || phoneNumber.length < 10 || rawNumber.includes('X')) {
-      console.error(`⚠️ PHONE_NUMBER invalide ou absent (valeur utilisée : « ${phoneNumber} »). Mets ton numéro complet avec l'indicatif, ex : 2250700000000, dans les variables Render.`);
+      console.error('⚠️ PHONE_NUMBER absent ou invalide. Dans Render, définis PHONE_NUMBER avec le numéro complet et son indicatif, chiffres uniquement (ex. 2250700000000).');
+    } else {
+      console.log(`📞 Demande de code de jumelage pour : +${phoneNumber}`);
+      setTimeout(async () => {
+        // Ne demande pas un code sur un socket qui a déjà été remplacé/fermé.
+        if (!sock || sock.user || sock.ws?.readyState === 3) return;
+        try {
+          let code = await sock.requestPairingCode(phoneNumber);
+          code = code?.match(/.{1,4}/g)?.join("-") || code;
+          console.log(`\n==================================`);
+          console.log(`👉 CODE DE JUMELAGE : ${code}`);
+          console.log(`==================================\n`);
+        } catch (err) {
+          console.error('❌ Code de jumelage impossible :', err?.message || err);
+        }
+      }, 6000);
     }
-    console.log(`📞 Jumelage demandé pour le numéro : +${phoneNumber}`);
-
-    setTimeout(async () => {
-      try {
-        let code = await sock.requestPairingCode(phoneNumber);
-        code = code?.match(/.{1,4}/g)?.join("-") || code;
-        console.log(`\n==================================`);
-        console.log(`👉 CODE DE JUMELAGE : ${code}`);
-        console.log(`==================================\n`);
-      } catch (err) {
-        console.error("❌ Erreur de génération du Pairing Code :", err);
-      }
-    }, 6000);
   }
+
+  // 🛡 DÉTECTION DES MESSAGES SUPPRIMÉS (ANTI-DELETE)
+  // Les messages que TOI (le compte du bot) supprimes ne sont jamais renvoyés : seulement ceux des autres.
+  sock.ev.on('messages.update', async (updates) => {
+    for (const update of updates) {
+      const estSupprime = (update.update && update.update.message === null) || update.update?.protocolMessage?.type === 0;
+      if (!estSupprime) continue;
+
+      // 🚫 Suppression faite par toi
+      if (update.key.fromMe) continue;
+
+      const deletedId = update.key.id;
+      const cachedMsg = messageCache[deletedId];
+      if (!cachedMsg) continue;
+
+      // 🚫 Message qui t'appartient (sécurité supplémentaire)
+      const botNumber = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+      if (cachedMsg.fromMe || cachedMsg.sender === botNumber) continue;
+
+      const remoteJid = update.key.remoteJid;
+      const sender = cachedMsg.sender;
+      const senderName = profilsJoueurs[sender] || `@${sender.split('@')[0]}`;
+
+      const alertText = `🚨 *ANTI-DELETE😌 : MESSAGE SUPPRIMÉ DÉTECTÉ ! T'ES SURPRIS 🤣* 🚨\n👤 *Auteur :* ${senderName}\n📅 *Date :* ${cachedMsg.fdate || 'Récemment'}\n`;
+
+      try {
+        if (cachedMsg.text) {
+          await sock.sendMessage(remoteJid, {
+            text: `${alertText}\n💬 *Message :*\n${cachedMsg.text}`,
+            mentions: [sender]
+          });
+        } else if (cachedMsg.mediaMessage) {
+          const type = cachedMsg.mediaType;
+          const caption = cachedMsg.caption ? `\n📝 *Légende :* ${cachedMsg.caption}` : '';
+          await sock.sendMessage(remoteJid, {
+            [type]: cachedMsg.buffer,
+            caption: `${alertText}${caption}`,
+            mentions: [sender]
+          });
+        }
+      } catch (e) {
+        console.error('⚠️ Anti-delete : envoi impossible :', e && e.message ? e.message : e);
+      }
+    }
+  });
 
   sock.ev.on('messages.upsert', async (m) => {
     try {
       const msg = m.messages[0];
       if (!msg || !msg.message) return;
+      if (msg.key && msg.key.fromMe && !msg.message.protocolMessage) memoriserMonEnvoi(msg.key.remoteJid, msg.key);
+
       if (msg.key.fromMe && processedMessages.has(msg.key.id)) return;
 
       const messageId = msg.key.id;
@@ -1693,13 +2291,13 @@ async function startBot() {
 
       if (utilisateursMutes.has(senderJid)) {
         await journaliserMessage(sock, msg, { muet: true });
-        return; 
+        return;
       }
 
       const timestamp = msg.messageTimestamp ? msg.messageTimestamp * 1000 : Date.now();
-      const formattedDate = new Date(timestamp).toLocaleString('fr-FR', { 
-        dateStyle: 'short', 
-        timeStyle: 'medium' 
+      const formattedDate = new Date(timestamp).toLocaleString('fr-FR', {
+        dateStyle: 'short',
+        timeStyle: 'medium'
       });
 
       const cleanTextLog = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").trim();
@@ -1707,6 +2305,8 @@ async function startBot() {
 
       const botNumber = sock.user.id.split(':')[0] + '@s.whatsapp.net';
       const isFromBot = msg.key.fromMe || senderJid === botNumber;
+      // Un utilisateur autorisé par le code peut gérer le bot comme le propriétaire pendant cette session.
+      const aAccesAdmin = isFromBot || utilisateursAutorisesMotDePasse.has(senderJid);
 
       let isAdmin = false;
       if (isGroup) {
@@ -1724,7 +2324,29 @@ async function startBot() {
 
       // 🧹 Commande lancée par le propriétaire : le message tapé est effacé tout de suite
       if (isFromBot && msg.key.fromMe && (/^\.[a-z0-9]/i.test(cleanText) || estCommandeReconnue(lowerText))) {
-        effacerMessage(sock, remoteJid, msg.key);
+        await effacerMessage(sock, remoteJid, msg.key);
+      }
+
+      let storedContent = msg.message;
+      if (storedContent?.ephemeralMessage) storedContent = storedContent.ephemeralMessage.message;
+      if (storedContent?.viewOnceMessageV2) storedContent = storedContent.viewOnceMessageV2.message;
+      if (storedContent?.viewOnceMessage) storedContent = storedContent.viewOnceMessage.message;
+
+      // Anti-delete : uniquement les messages texte (pas les photos, vidéos ni vocaux, pour économiser la RAM)
+      const textToCache = storedContent.conversation || storedContent.extendedTextMessage?.text || "";
+
+      if (textToCache) {
+        messageCache[messageId] = {
+          sender: senderJid,
+          fromMe: !!msg.key.fromMe,
+          text: textToCache,
+          fdate: formattedDate
+        };
+      }
+
+      const cacheKeys = Object.keys(messageCache);
+      if (cacheKeys.length > 50) {
+        delete messageCache[cacheKeys[0]];
       }
 
       if (!cleanText) return;
@@ -1738,14 +2360,14 @@ async function startBot() {
       }
 
       // 🎭 Commande reconnue : réaction immédiate, puis "en train d'écrire…" jusqu'à l'arrivée de la réponse
-      if (estCommandeReconnue(lowerText) && !(data.botPrivateMode && !isFromBot)) {
+      if (estCommandeReconnue(lowerText) && !(data.botPrivateMode && !aAccesAdmin)) {
         await reagirCommande(sock, msg);
         demarrerComposing(sock, remoteJid);
         statsCommandes[senderJid] = (statsCommandes[senderJid] || 0) + 1;
       }
 
       if (lowerText === '.private on' || lowerText === '.private off') {
-        if (!isFromBot) {
+        if (!aAccesAdmin) {
           await envoyerAvecDelai(sock, remoteJid, { text: "⚠️ Seul le propriétaire du bot peut modifier le mode privé !" }, { quoted: msg }, 'texte');
           return;
         }
@@ -1766,30 +2388,71 @@ async function startBot() {
         data.botPrivateMode = true;
       }
 
-      if (data.botPrivateMode && !isFromBot) {
-        if (cleanText === '2010') {
-          data.botPrivateMode = false;
-          refusPriveDeja.clear();
-          await envoyerAvecDelai(sock, remoteJid, { text: "🔓 *Code secret correct !*" }, { quoted: msg }, 'texte');
+      // 📖 Le dictionnaire reste accessible même en mode privé
+      const acteurCourant = acteurDe(msg, sock, remoteJid, senderJid);
+      const commandeAutorisee = /^\.(dico|def|dictionnaire|gamble|gumball)(\s|$)/.test(lowerText)
+        || lowerText.trim() === 'yasmine'
+        || (gumballEnAttente.has(cleGumball(remoteJid, acteurCourant)) && /^\d{1,2}$/.test(cleanText.trim()));
+      // 🔑 Le code doit être envoyé en privé après que cette personne a demandé l'accès dans un groupe.
+      // Le code n'est jamais demandé/publié dans le groupe et n'en déverrouille pas l'accès pour les autres.
+      if (!isGroup && !isFromBot && cleanText.trim() === '2010' && demandesAccesPrive.has(senderJid)) {
+        demandesAccesPrive.delete(senderJid);
+        utilisateursAutorisesMotDePasse.add(senderJid);
+        refusPriveDeja.delete(senderJid);
+        await envoyerAvecDelai(sock, remoteJid, { text: "🔓 *Accès administrateur accordé.* Retourne dans le groupe : tes commandes sont maintenant autorisées pendant que le bot reste en ligne." }, {}, 'texte');
+        return;
+      }
+
+      if (data.botPrivateMode && !aAccesAdmin && !commandeAutorisee) {
+        if (isGroup) {
+          // On garde en attente l'identité exacte du membre du groupe; le code en privé ne donne accès qu'à lui.
+          demandesAccesPrive.add(senderJid);
+          if (!refusPriveDeja.has(senderJid)) {
+            refusPriveDeja.add(senderJid);
+            await envoyerAvecDelai(sock, remoteJid, { text: "🤖 Bot en mode privé 🔒\nPour demander l'accès, écris *2010* en message privé au compte du bot. Le code ne doit pas être envoyé dans ce groupe." }, { quoted: msg }, 'texte');
+          }
         } else if (!refusPriveDeja.has(senderJid)) {
-          // Une seule fois par personne : ensuite silence total, même si elle insiste
           refusPriveDeja.add(senderJid);
-          await envoyerAvecDelai(sock, remoteJid, { text: "🤖 en mode privé🔒\nattendez un instant il vous reviendra ☺️" }, { quoted: msg }, 'texte');
+          await envoyerAvecDelai(sock, remoteJid, { text: "🤖 Bot en mode privé 🔒\nSi le bot t'a demandé l'accès dans un groupe, envoie *2010* ici en privé." }, { quoted: msg }, 'texte');
         }
         return;
       }
 
+      // 👋 Accueil automatique : salut puis photo Gumball, pour toute personne qui écrit en privé
+      if (!isGroup && !isFromBot) accueilAutomatique(sock, msg, remoteJid);
+
       if (await gererReponseMariage(sock, remoteJid, senderJid, lowerText)) return;
 
-      if (/^\.cute(\s|$)/.test(lowerText)) { await commandeCute(sock, msg, remoteJid, cleanText); return; }
-      if (/^\.askwedding(\s|$)/.test(lowerText)) { await commandeAskWedding(sock, msg, remoteJid, acteurDe(msg, sock, remoteJid, senderJid)); return; }
-      if (/^\.infogroupe$/.test(lowerText)) { await commandeInfoGroupe(sock, msg, remoteJid, isGroup); return; }
-      if (/^\.add(\s|$)/.test(lowerText)) {
-        if (!isFromBot) return;
-        await commandeAdd(sock, msg, remoteJid, isGroup, cleanText);
+      if (/^\.madara(?:\s|$)/i.test(cleanText)) {
+        const arg = cleanText.replace(/^\.madara\s*/i, '').trim().toLowerCase();
+        let reponse;
+        if (['technique', 'techniques', 'pouvoir', 'pouvoirs'].includes(arg)) {
+          reponse = `🌀 *ARCHIVES SHINOBI — TECHNIQUES*\n\n${MADARA_TECHNIQUES.map((t, i) => `${i + 1}. ${t}`).join('\n\n')}\n\n_Tape .madara pour recevoir une pensée stratégique._`;
+        } else if (['conseil', 'strategie', 'stratégie'].includes(arg)) {
+          reponse = `♟️ *Conseil du stratège*\n${alea(MADARA_REPLIQUES)}`;
+        } else if (['qui es-tu', 'identite', 'identité'].includes(arg)) {
+          reponse = "🌑 Je suis une voix fictive inspirée d'un stratège shinobi : calme, calculateur et attentif au prochain mouvement.";
+        } else {
+          reponse = `🌑 *Parole du stratège*\n${alea(MADARA_REPLIQUES)}\n\n_Tape *.madara techniques* pour consulter les pouvoirs fictifs._`;
+        }
+        await envoyerAvecDelai(sock, remoteJid, { text: reponse }, { quoted: msg }, 'texte');
         return;
       }
-      if (lowerText.startsWith('.wedding')) {
+      if (lowerText.trim() === '.techniques') {
+        const reponse = `🌀 *ARCHIVES SHINOBI — TECHNIQUES*\n\n${MADARA_TECHNIQUES.map((t, i) => `${i + 1}. ${t}`).join('\n\n')}`;
+        await envoyerAvecDelai(sock, remoteJid, { text: reponse }, { quoted: msg }, 'texte');
+        return;
+      }
+      if (/^\.cute(\s|$)/.test(lowerText)) { await commandeCute(sock, msg, remoteJid, cleanText); return; }
+      if (/^\.askwedding(\s|$)/.test(lowerText)) { await commandeAskWedding(sock, msg, remoteJid, acteurDe(msg, sock, remoteJid, senderJid)); return; }
+      if (/^\.routine$/.test(lowerText)) { await commandeRoutine(sock, msg, remoteJid); return; }
+      if (/^\.del$/.test(lowerText)) {
+        if (!aAccesAdmin) return;
+        await commandeDel(sock, remoteJid);
+        return;
+      }
+
+      if (lowerText.startsWith('.wedding') || lowerText.startsWith('.mariage')) {
         await commandeMariage(sock, msg, remoteJid, acteurDe(msg, sock, remoteJid, senderJid));
         return;
       }
@@ -1800,7 +2463,7 @@ async function startBot() {
       }
 
       if (['.kick', '.promote', '.demote', '.warn', '.mute', '.unmute'].some(cmd => lowerText.startsWith(cmd))) {
-        if (!isFromBot) {
+        if (!aAccesAdmin) {
           await envoyerAvecDelai(sock, remoteJid, { text: "⚠ Réservé au propriétaire du bot !" }, { quoted: msg }, 'texte');
           return;
         }
@@ -1851,6 +2514,87 @@ async function startBot() {
         }
       }
 
+      if (lowerText.startsWith('.translate') || lowerText.startsWith('.trad')) {
+        let args = cleanText.replace(/^\.(translate|trad)\s*/i, '').trim();
+        let targetLang = "fr";
+        let textToTranslate = "";
+
+        const parts = args.split(' ');
+        if (parts[0] && parts[0].length <= 3) {
+          targetLang = parts[0].toLowerCase();
+          textToTranslate = parts.slice(1).join(' ').trim();
+        } else {
+          textToTranslate = args;
+        }
+
+        if (!textToTranslate && msg.message.extendedTextMessage?.contextInfo?.quotedMessage) {
+          const quotedMsg = msg.message.extendedTextMessage.contextInfo.quotedMessage;
+          textToTranslate = quotedMsg.conversation || quotedMsg.extendedTextMessage?.text || "";
+        }
+
+        if (!textToTranslate) {
+          await envoyerAvecDelai(sock, remoteJid, { text: "⚠️ Rien à traduire !\nExemple : *.translate en bonjour tout le monde*\n(ou réponds à un message avec *.translate en*)" }, { quoted: msg }, 'texte');
+          return;
+        }
+
+        let traduction = null;
+        try {
+          const response = await axios.get('https://api.mymemory.translated.net/get', {
+            params: { q: textToTranslate, langpair: `autodetect|${targetLang}` }, timeout: 12000
+          });
+          traduction = response.data?.responseData?.translatedText;
+        } catch (e) {
+          console.error(`[TRAD] ❌ ${e && e.message ? e.message : e}`);
+        }
+
+        if (traduction) {
+          await envoyerAvecDelai(sock, remoteJid, { text: `🌐 *TRADUCTION* (${targetLang}) : ${traduction}` }, { quoted: msg }, 'texte');
+        } else {
+          await envoyerAvecDelai(sock, remoteJid, { text: "😕 Je n'ai pas réussi à traduire ça. Vérifie le code de langue (en, fr, es, ar...) ou réessaie dans un instant." }, { quoted: msg }, 'texte');
+        }
+        return;
+      }
+
+      if (lowerText.startsWith('ret ')) {
+        const regex = /^ret\s+(.*?)\s*\((\d+)\)$/i;
+        const match = cleanText.match(regex);
+        if (!match) {
+          await envoyerAvecDelai(sock, remoteJid, { text: "⚠️ Format : *ret [phrase] (nombre)*\nExemple : *ret salut tout le monde (3)*" }, { quoted: msg }, 'texte');
+          return;
+        }
+
+        const phraseARepeter = match[1].trim();
+        let nombreFois = parseInt(match[2], 10);
+        if (nombreFois > 10) nombreFois = 10;
+
+        for (let i = 0; i < nombreFois; i++) {
+          if (i > 0) await new Promise(resolve => setTimeout(resolve, 1000));
+          await sock.sendMessage(remoteJid, { text: phraseARepeter });
+        }
+        return;
+      }
+
+      if (!sessionsMaman[senderJid]) {
+        sessionsMaman[senderJid] = { etape: 0 };
+      }
+      let sessionM = sessionsMaman[senderJid];
+
+      if (sessionM.etape === 0 && (lowerText.includes("où est mon botti") || lowerText.includes("botti t'es là") || lowerText.includes("botti t'es la"))) {
+        await envoyerAvecDelai(sock, remoteJid, { text: "Oui maman je suis là 🤖😌" }, { quoted: msg }, 'texte');
+        sessionM.etape = 1;
+        return;
+      }
+      else if (sessionM.etape === 1 && (lowerText.includes("oui"))) {
+        await envoyerAvecDelai(sock, remoteJid, { text: "génial je suis content maman chérie 🥹🤖" }, { quoted: msg }, 'texte');
+        sessionM.etape = 2;
+        return;
+      }
+      else if (sessionM.etape === 2 && !isGroup && MOTS_AMOUR_PRIVE.includes(lowerText)) {
+        await envoyerAvecDelai(sock, remoteJid, { text: REPONSE_AMOUR_MAMAN }, { quoted: msg }, 'texte');
+        sessionM.etape = 0;
+        return;
+      }
+
       if (/^\.(imagine|gen)(\s|$)/.test(lowerText)) {
         await commandeImage(sock, msg, remoteJid, cleanText, true);
         return;
@@ -1858,6 +2602,42 @@ async function startBot() {
 
       if (/^\.(image|img)(\s|$)/.test(lowerText)) {
         await commandeImage(sock, msg, remoteJid, cleanText, false);
+        return;
+      }
+
+      if (/^\.hack(\s|$)/.test(lowerText)) {
+        await commandeHack(sock, msg, remoteJid, acteurDe(msg, sock, remoteJid, senderJid), isGroup, cleanText);
+        return;
+      }
+
+      if (/^\.?drague(\s|$)/.test(lowerText)) {
+        await commandeDrague(sock, msg, remoteJid, acteurDe(msg, sock, remoteJid, senderJid), cleanText);
+        return;
+      }
+
+      if (lowerText.trim() === '.guerre') {
+        if (!GUERRE_VIDEO) {
+          await envoyerAvecDelai(sock, remoteJid, { text: "⚠️ Vidéo introuvable. Ajoute le fichier `media/guerre.mp4` au dépôt GitHub puis redéploie le bot." }, { quoted: msg }, 'texte');
+        } else {
+          await envoyerAvecDelai(sock, remoteJid, { video: GUERRE_VIDEO, mimetype: 'video/mp4', caption: '🎬 *Guerre*' }, { quoted: msg }, 'media');
+        }
+        return;
+      }
+
+      if (lowerText.trim() === 'yasmine' && YASMINE_VIDEO) {
+        await envoyerAvecDelai(sock, remoteJid, { video: YASMINE_VIDEO, mimetype: 'video/mp4', caption: '🎬 *Yasmine* 💅', viewOnce: true }, { quoted: msg }, 'media');
+        return;
+      }
+
+      if (/^\.(gamble|gumball)$/.test(lowerText)) {
+        await commandeGumball(sock, msg, remoteJid, acteurCourant);
+        return;
+      }
+
+      if (await gererNumeroGumball(sock, msg, remoteJid, acteurCourant, cleanText)) return;
+
+      if (/^\.(dico|def|dictionnaire)(\s|$)/.test(lowerText)) {
+        await commandeDico(sock, msg, remoteJid, cleanText);
         return;
       }
 
@@ -1872,16 +2652,17 @@ async function startBot() {
       }
 
       if (/^\.balance(\s|$)/.test(lowerText)) {
-        await commandeBalance(sock, msg, remoteJid, acteurDe(msg, sock, remoteJid, senderJid));
+        await commandeBalance(sock, msg, remoteJid, cibleCommande(msg, sock, remoteJid, senderJid));
         return;
       }
 
       if (/^\.?(cerveau|mox)(\s|$)/.test(lowerText)) {
-        await commandeCerveau(sock, msg, remoteJid, acteurDe(msg, sock, remoteJid, senderJid));
+        await commandeCerveau(sock, msg, remoteJid, cibleCommande(msg, sock, remoteJid, senderJid));
         return;
       }
 
-      const resultatMenu = construireMenu(cleanText, profilsJoueurs[senderJid] || 'Membre VIP');
+      const nomMembre = profilsJoueurs[senderJid] || msg.pushName || 'Membre VIP';
+      const resultatMenu = construireMenu(cleanText, nomMembre, senderJid);
       if (resultatMenu) {
         await envoyerMenu(sock, remoteJid, msg, resultatMenu);
         return;
@@ -1923,7 +2704,7 @@ async function startBot() {
       }
 
       if (/^(\.pp|\.p|pipi)(\s|$)/.test(lowerText)) {
-        const cible = trouverCible(msg, remoteJid, false) || acteurDe(msg, sock, remoteJid, senderJid);
+        const cible = cibleCommande(msg, sock, remoteJid, senderJid);
         try {
           const ppUrl = await sock.profilePictureUrl(cible, 'image');
           await envoyerAvecDelai(sock, remoteJid, { image: { url: ppUrl }, caption: `📸 Photo de profil de ${nomAffiche(cible)}`, mentions: [cible] }, { quoted: msg }, 'media');
@@ -1956,6 +2737,9 @@ async function startBot() {
       try { if (sock) arreterComposing(sock, m.messages[0]?.key?.remoteJid); } catch (e) {}
     }
   });
+  } finally {
+    demarrageEnCours = false;
+  }
 }
 
-startBot();
+startBot().catch(e => console.error('❌ Échec du démarrage initial :', e));
