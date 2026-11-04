@@ -113,13 +113,17 @@ for (const numero of registre.parkes || []) {
   }
 }
 
-// 🚦 limite : 6 demandes / 10 min / adresse IP
-const essaisIp = new Map();
+// 🚦 Limites par adresse IP (fenêtre de 10 min) :
+//  - 40 demandes au total ; - 8 échecs (code ou numéro invalide).
+// Une demande refusée pour « trop d'essais » ne prolonge plus le blocage.
+const essaisIp = new Map(), echecsIp = new Map();
+const recents = (m, ip) => { const t = Date.now(), l = (m.get(ip) || []).filter(x => t - x < 600000); m.set(ip, l); return l; };
 const tropDEssais = (ip) => {
-  const t = Date.now(), l = (essaisIp.get(ip) || []).filter(x => t - x < 600000);
-  l.push(t); essaisIp.set(ip, l);
-  return l.length > 6;
+  if (recents(echecsIp, ip).length >= 8 || recents(essaisIp, ip).length >= 40) return true;
+  essaisIp.get(ip).push(Date.now());
+  return false;
 };
+const noterEchec = (ip) => { recents(echecsIp, ip).push(Date.now()); };
 
 const etat = (avecReservations = true) => {
   promouvoir();
@@ -128,6 +132,7 @@ const etat = (avecReservations = true) => {
 };
 
 const app = express();
+app.set('trust proxy', 1);   // Render est derrière un proxy : on lit la vraie IP du visiteur
 app.use(express.json({ limit: '2kb' }));
 // 📱 Fichiers de l'appli (manifeste, icônes, service worker, page hors ligne)
 app.use(express.static(path.join(__dirname, 'public'), { index: false, setHeaders: (res, f) => { if (f.endsWith('sw.js')) res.setHeader('Cache-Control', 'no-cache'); } }));
@@ -138,8 +143,8 @@ app.post('/api/connecter', (req, res) => {
   if (tropDEssais(req.ip)) return res.status(429).json({ erreur: 'Trop d’essais. Réessaie dans quelques minutes.' });
   const numero = String((req.body && req.body.numero) || '').replace(/\D/g, '');
   const code = String((req.body && req.body.code) || '').trim().toUpperCase();
-  if (!/^[1-9]\d{7,14}$/.test(numero)) return res.status(400).json({ erreur: 'Numéro invalide : indicatif du pays + numéro, sans + ni espaces.' });
-  if (!CODES.length || !CODES.includes(code)) return res.status(403).json({ erreur: 'Code de parrainage invalide.' });
+  if (!/^[1-9]\d{7,14}$/.test(numero)) { noterEchec(req.ip); return res.status(400).json({ erreur: 'Numéro invalide : indicatif du pays + numéro, sans + ni espaces.' }); }
+  if (!CODES.length || !CODES.includes(code)) { noterEchec(req.ip); return res.status(403).json({ erreur: 'Code de parrainage invalide.' }); }
 
   const existant = sessions.get(numero);
   if (existant) return res.json({ jeton: existant.jeton, statut: existant.statut, codeJumelage: existant.codeJumelage });
@@ -268,8 +273,8 @@ function lireDemande(req, res) {
   if (tropDEssais(req.ip)) { res.status(429).json({ erreur: 'Trop d’essais. Réessaie dans quelques minutes.' }); return null; }
   const numero = String((req.body && req.body.numero) || '').replace(/\D/g, '');
   const code = String((req.body && req.body.code) || '').trim().toUpperCase();
-  if (!/^[1-9]\d{7,14}$/.test(numero)) { res.status(400).json({ erreur: 'Numéro invalide : indicatif du pays + numéro, sans + ni espaces.' }); return null; }
-  if (!CODES.length || !CODES.includes(code)) { res.status(403).json({ erreur: 'Code de parrainage invalide.' }); return null; }
+  if (!/^[1-9]\d{7,14}$/.test(numero)) { noterEchec(req.ip); res.status(400).json({ erreur: 'Numéro invalide : indicatif du pays + numéro, sans + ni espaces.' }); return null; }
+  if (!CODES.length || !CODES.includes(code)) { noterEchec(req.ip); res.status(403).json({ erreur: 'Code de parrainage invalide.' }); return null; }
   return { numero, code };
 }
 app.post('/api/file/rejoindre', (req, res) => {
