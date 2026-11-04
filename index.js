@@ -87,7 +87,7 @@ const REGEX_PRESENTATION = /^\.pr[ée]sentation\s*([1-6])$/i;
 // 🎙️ Commandes qui répondent par un vocal : le bot affiche « enregistre un audio… » au lieu de « écrit… »
 const estCommandeVocale = (t) => {
   const x = (t || '').trim().toLowerCase();
-  return /^\.(rire|sad|melodie)$/.test(x) || REGEX_PRESENTATION.test(x) || /^\.voc(-f)?(\s|$)/.test(x);
+  return /^\.(rire|sad|melodie|peur\??)$/.test(x) || REGEX_PRESENTATION.test(x) || /^\.voc(-f)?(\s|$)/.test(x);
 };
 
 // 📝 ═══════════════════════════════════════════════════════════
@@ -1206,6 +1206,7 @@ const CATEGORIES_MENU = [
       { groupe: '📸 Médias', noms: ['.melodie'], exact: true, desc: 'Envoyer musique.mp3 sous forme de vocal' },
       { groupe: '📸 Médias', noms: ['.rire'], exact: true, desc: 'Envoyer rire.mp3 sous forme de vocal' },
       { groupe: '📸 Médias', noms: ['.sad'], exact: true, desc: 'Envoyer sad.mp3 sous forme de vocal' },
+      { groupe: '📸 Médias', noms: ['.peur?'], exact: true, desc: 'Envoyer peur.mp3 sous forme de vocal' },
       { groupe: '📸 Médias', noms: ['.presentation'], aff: '.présentation', args: '[1-6]', test: (t) => REGEX_PRESENTATION.test(t), desc: 'Envoyer la présentation n°1 à 6 en vocal' },
       { groupe: '📸 Médias', noms: ['.pp', '.p'], aff: '.pp', args: '[@mention]', desc: "Photo de profil (groupe & privé)" },
       { groupe: '📸 Médias', noms: ['pipi'], args: '[@mention]', desc: "Photo de profil (pipi, groupe & privé)" },
@@ -2856,6 +2857,15 @@ async function startBot() {
         catch (e) {
           console.error(`[AUDIO] .presentation ${numPresentation} :`, e && e.message ? e.message : e);
           await envoyerAvecDelai(sock, remoteJid, { text: `⚠️ Je n'ai pas réussi à préparer le vocal. Vérifie que FFmpeg est disponible sur Render et que \`media/presentation${numPresentation}.mp3\` est bien présent.` }, { quoted: msg }, 'texte');
+        }
+        return;
+      }
+
+      if (/^\.peur\??$/.test(lowerText.trim())) {
+        try { await envoyerFichierEnVocal(sock, msg, remoteJid, 'peur.mp3'); }
+        catch (e) {
+          console.error('[AUDIO] .peur? :', e && e.message ? e.message : e);
+          await envoyerAvecDelai(sock, remoteJid, { text: "⚠️ Je n'ai pas réussi à préparer le vocal. Vérifie que FFmpeg est disponible sur Render et que `media/peur.mp3` est bien présent." }, { quoted: msg }, 'texte');
         }
         return;
       }
