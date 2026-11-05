@@ -58,6 +58,9 @@ process.on('message', (commande) => {
 // Anti-doublons & Cache Anti-Delete & Mutes
 const processedMessages = new Set();
 const messageCache = {};
+let antiDeleteCacheBytes = 0;
+const ANTI_DELETE_MAX_MEDIA_BYTES = 8 * 1024 * 1024;
+const ANTI_DELETE_MAX_CACHE_BYTES = 24 * 1024 * 1024;
 const utilisateursMutes = new Set();
 // 🔒 Mode privé : personnes déjà prévenues (le bot ne le dit qu'une fois) + compteur de commandes pour .fiche
 const refusPriveDeja = new Set();
@@ -290,6 +293,9 @@ const intervalleEntreMessages = () => entierAlea(INTERVALLE_MIN_MS, INTERVALLE_M
 
 // 🔐 Secrets lus uniquement depuis les variables d'environnement Render.
 const MOT_DE_PASSE_PRIVE = (process.env.BOT_MOT_DE_PASSE || '').trim();
+// Anti-delete : destination par défaut = numéro WhatsApp du bot (incognito).
+// Valeurs possibles : bot (recommandé) ou chat (conversation d'origine).
+const ANTI_DELETE_DEST = (process.env.ANTI_DELETE_DEST || 'bot').trim().toLowerCase();
 const CODE_YASMINE = (process.env.YASMINE_CODE || '').trim();
 const demandesYasmine = new Map(); // chat|expéditeur -> expiration du code (60 s)
 // 🚦 Anti-spam : une commande par utilisateur toutes les 2,5 secondes
@@ -2745,24 +2751,31 @@ async function startBot() {
       const remoteJid = update.key.remoteJid;
       const sender = cachedMsg.sender;
       const senderName = profilsJoueurs[sender] || `@${sender.split('@')[0]}`;
-
-      const alertText = `🚨 *ANTI-DELETE😌 : MESSAGE SUPPRIMÉ DÉTECTÉ ! T'ES SURPRIS 🤣* 🚨\n👤 *Auteur :* ${senderName}\n📅 *Date :* ${cachedMsg.fdate || 'Récemment'}\n`;
+      const destination = ANTI_DELETE_DEST === 'chat' ? remoteJid : botNumber;
+      const chatLabel = remoteJid.endsWith('@g.us') ? `Groupe : ${remoteJid}` : `Conversation : ${remoteJid.split('@')[0]}`;
+      const alertText = `🚨 *TITAN BOT — ANTI-DELETE*\n👤 *Auteur :* ${senderName}\n📱 *Numéro :* ${sender.split('@')[0]}\n💬 *Origine :* ${chatLabel}\n📅 *Date :* ${cachedMsg.fdate || 'Récemment'}\n`;
 
       try {
         if (cachedMsg.text) {
-          await sock.sendMessage(remoteJid, {
-            text: `${alertText}\n💬 *Message :*\n${cachedMsg.text}`,
-            mentions: [sender]
+          await sock.sendMessage(destination, {
+            text: `${alertText}\n🗑️ *Message supprimé :*\n${cachedMsg.text}`
           });
-        } else if (cachedMsg.mediaMessage) {
+        } else if (cachedMsg.mediaMessage && cachedMsg.buffer) {
           const type = cachedMsg.mediaType;
-          const caption = cachedMsg.caption ? `\n📝 *Légende :* ${cachedMsg.caption}` : '';
-          await sock.sendMessage(remoteJid, {
-            [type]: cachedMsg.buffer,
-            caption: `${alertText}${caption}`,
-            mentions: [sender]
-          });
+          const caption = `${alertText}${cachedMsg.caption ? `\n📝 *Légende :* ${cachedMsg.caption}` : ''}`;
+          if (type === 'audio') {
+            await sock.sendMessage(destination, { audio: cachedMsg.buffer, mimetype: cachedMsg.mimetype || 'audio/ogg; codecs=opus', ptt: false });
+            await sock.sendMessage(destination, { text: caption });
+          } else if (type === 'document') {
+            await sock.sendMessage(destination, { document: cachedMsg.buffer, mimetype: cachedMsg.mimetype || 'application/octet-stream', fileName: cachedMsg.fileName || 'message-recupere', caption });
+          } else if (type === 'sticker') {
+            await sock.sendMessage(destination, { sticker: cachedMsg.buffer });
+            await sock.sendMessage(destination, { text: caption });
+          } else {
+            await sock.sendMessage(destination, { [type]: cachedMsg.buffer, caption });
+          }
         }
+        console.log(`🛡️ Anti-delete transmis vers ${destination}`);
       } catch (e) {
         console.error('⚠️ Anti-delete : envoi impossible :', e && e.message ? e.message : e);
       }
@@ -2811,6 +2824,59 @@ async function startBot() {
       const cleanText = (msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || "").trim();
       const lowerText = cleanText.toLowerCase();
 
+      // Cache Anti-Delete avant le verrouillage privé : même incognito, les suppressions
+      // des autres utilisateurs doivent pouvoir être transmises au numéro du bot.
+      let storedContent = msg.message;
+      if (storedContent?.ephemeralMessage) storedContent = storedContent.ephemeralMessage.message;
+      if (storedContent?.viewOnceMessageV2) storedContent = storedContent.viewOnceMessageV2.message;
+      if (storedContent?.viewOnceMessage) storedContent = storedContent.viewOnceMessage.message;
+      const textToCache = storedContent?.conversation || storedContent?.extendedTextMessage?.text || '';
+      if (!msg.key.fromMe) {
+        const cacheEntry = { sender: senderJid, fromMe: false, text: textToCache, fdate: formattedDate };
+        const mediaKeys = [
+          ['imageMessage', 'image'], ['videoMessage', 'video'],
+          ['audioMessage', 'audio'], ['stickerMessage', 'sticker'],
+          ['documentMessage', 'document']
+        ];
+        const mediaInfo = mediaKeys.map(([key, type]) => storedContent?.[key] ? { media: storedContent[key], type } : null).find(Boolean);
+        if (mediaInfo) {
+          const tailleAnnoncee = Number(mediaInfo.media.fileLength) || 0;
+          // Cache borné pour protéger la mémoire du service Render.
+          if (!tailleAnnoncee || tailleAnnoncee <= ANTI_DELETE_MAX_MEDIA_BYTES) {
+            try {
+              const stream = await downloadContentFromMessage(mediaInfo.media, mediaInfo.type);
+              const chunks = [];
+              let total = 0;
+              for await (const chunk of stream) {
+                total += chunk.length;
+                if (total > ANTI_DELETE_MAX_MEDIA_BYTES) throw new Error('média trop volumineux pour le cache anti-delete');
+                chunks.push(chunk);
+              }
+              const buffer = Buffer.concat(chunks);
+              if (buffer.length && antiDeleteCacheBytes + buffer.length <= ANTI_DELETE_MAX_CACHE_BYTES) {
+                cacheEntry.mediaMessage = true;
+                cacheEntry.mediaType = mediaInfo.type;
+                cacheEntry.buffer = buffer;
+                cacheEntry.mimetype = mediaInfo.media.mimetype || 'application/octet-stream';
+                cacheEntry.fileName = mediaInfo.media.fileName || `media-${messageId}`;
+                cacheEntry.caption = mediaInfo.media.caption || '';
+                antiDeleteCacheBytes += buffer.length;
+              }
+            } catch (e) {
+              console.warn('[ANTI-DELETE] Média non mis en cache :', e?.message || e);
+            }
+          }
+        }
+        messageCache[messageId] = cacheEntry;
+        const cacheKeys = Object.keys(messageCache);
+        while (cacheKeys.length > 100) {
+          const oldest = cacheKeys.shift();
+          const removed = messageCache[oldest];
+          if (removed?.buffer) antiDeleteCacheBytes = Math.max(0, antiDeleteCacheBytes - removed.buffer.length);
+          delete messageCache[oldest];
+        }
+      }
+
       if (data.botPrivateMode === undefined) data.botPrivateMode = true;
 
       // .private on/off : uniquement le propriétaire, accusé par réaction et sans texte.
@@ -2840,8 +2906,10 @@ async function startBot() {
       const aAccesPrive = isFromBot || aMotDePasse;
       const aAccesAdmin = isFromBot; // le mot de passe privé ne donne jamais les droits d'administration.
 
-      // Silence absolu pour les autres : aucun vocal, accueil, avertissement ou commande.
+      // Silence incognito : les non-propriétaires ne déclenchent jamais de réponse libre.
+      // En mode privé, seuls le propriétaire et les numéros ayant fourni le mot de passe passent.
       if (data.botPrivateMode && !aAccesPrive) return;
+      if (!isFromBot && !estCommandeReconnue(lowerText)) return;
 
       let isAdmin = false;
       if (isGroup) {
@@ -2852,34 +2920,6 @@ async function startBot() {
             isAdmin = true;
           }
         } catch (e) {}
-      }
-
-      // 🤖 Réponse vocale automatique aux questions sur l'identité du bot.
-      if (!isFromBot && cleanText && /(?:qui es[- ]tu|qui est[- ]tu|comment te nommes[- ]tu|comment tu t'appelles|quel est ton nom|c'est quoi ton nom|ton nom c'est quoi)/i.test(normaliserTexte(cleanText))) {
-        await envoyerFichierEnVocal(sock, msg, remoteJid, 'sound.mp3');
-        return;
-      }
-
-      let storedContent = msg.message;
-      if (storedContent?.ephemeralMessage) storedContent = storedContent.ephemeralMessage.message;
-      if (storedContent?.viewOnceMessageV2) storedContent = storedContent.viewOnceMessageV2.message;
-      if (storedContent?.viewOnceMessage) storedContent = storedContent.viewOnceMessage.message;
-
-      // Anti-delete : uniquement les messages texte (pas les photos, vidéos ni vocaux, pour économiser la RAM)
-      const textToCache = storedContent.conversation || storedContent.extendedTextMessage?.text || "";
-
-      if (textToCache) {
-        messageCache[messageId] = {
-          sender: senderJid,
-          fromMe: !!msg.key.fromMe,
-          text: textToCache,
-          fdate: formattedDate
-        };
-      }
-
-      const cacheKeys = Object.keys(messageCache);
-      if (cacheKeys.length > 50) {
-        delete messageCache[cacheKeys[0]];
       }
 
       if (!cleanText) return;
@@ -2901,7 +2941,6 @@ async function startBot() {
 
       const acteurCourant = acteurDe(msg, sock, remoteJid, senderJid);
 
-      if (!isGroup && !isFromBot) accueilAutomatique(sock, msg, remoteJid);
 
       if (await gererReponseMariage(sock, remoteJid, senderJid, lowerText)) return;
 

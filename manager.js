@@ -223,6 +223,24 @@ app.post('/api/admin/messages', admin, (req, res) => {
   liste.sort((a, c) => c.t - a.t);
   res.json({ total, max: MSG_MAX, messages: liste.slice(0, 150), types, conversations });
 });
+
+// 🗑️ Suppression manuelle d'un message du panneau admin (et de son média local).
+app.post('/api/admin/messages/supprimer', admin, (req, res) => {
+  const bot = String((req.body && req.body.bot) || '');
+  const id = String((req.body && req.body.id) || '');
+  if (!/^\\d{5,16}$/.test(bot) || !id || id.length > 200) {
+    return res.status(400).json({ erreur: 'Identifiants de message invalides.' });
+  }
+  const s = sessions.get(bot) || parkes.get(bot);
+  if (!s) return res.status(404).json({ erreur: 'Bot introuvable.' });
+  const index = s.messages.findIndex(m => m.id === id);
+  if (index < 0) return res.status(404).json({ erreur: 'Message déjà supprimé ou expiré.' });
+  const [message] = s.messages.splice(index, 1);
+  if (message.media && message.media.f && /^[A-Za-z0-9_-]{1,80}\\.(jpg|png|webp|ogg|mp3|m4a)$/.test(message.media.f)) {
+    fs.rm(path.join(DOSSIER, bot, 'medias', message.media.f), { force: true }, () => {});
+  }
+  res.json({ ok: true, supprime: 1 });
+});
 // Pause douce : garde le socket WhatsApp connecté, mais ignore les nouveaux messages.
 app.post('/api/admin/pause', admin, (req, res) => {
   const s = sessions.get(String((req.body && req.body.numero) || ''));
