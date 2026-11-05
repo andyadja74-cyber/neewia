@@ -214,6 +214,37 @@ async function journaliserMessage(sock, msg, { muet = false } = {}) {
   }
 }
 
+// 🖼️🎤 Médias pour la page admin : les images et vocaux (reçus ET envoyés) sont gardés sur le disque du bot
+// (dossier medias/, effacés par le gestionnaire quand le message sort de la liste). Désactivable : MEDIAS_ADMIN=off
+const MEDIAS_ADMIN = (process.env.MEDIAS_ADMIN || 'on').trim().toLowerCase() !== 'off';
+const MEDIA_IMAGE_MAX = 2.5 * 1024 * 1024, MEDIA_AUDIO_MAX = 1.5 * 1024 * 1024;
+async function sauverMediaAdmin(sock, msg, m, cle) {
+  const type = cle === 'audioMessage' ? 'audio' : cle === 'stickerMessage' ? 'sticker' : 'image';
+  const mime = String(m.mimetype || '');
+  const info = { type, mime, d: Number(m.seconds) || 0 };
+  try {
+    if (type === 'image' && m.jpegThumbnail) {
+      const mini = Buffer.from(m.jpegThumbnail);
+      if (mini.length && mini.length <= 12000) info.mini = 'data:image/jpeg;base64,' + mini.toString('base64');
+    }
+  } catch (e) {}
+  const dossier = process.env.AUTH_DIR ? path.join(process.env.AUTH_DIR, 'medias') : null;
+  const max = type === 'audio' ? MEDIA_AUDIO_MAX : MEDIA_IMAGE_MAX;
+  const taille = Number(m.fileLength && m.fileLength.toString ? m.fileLength.toString() : m.fileLength) || 0;
+  if (!dossier || (taille && taille > max)) return info;
+  try {
+    const buffer = await telechargerMedia(sock, m, type, msg.key);
+    if (!buffer || buffer.length > max) return info;
+    const ext = /ogg|opus/i.test(mime) ? 'ogg' : /mpeg|mp3/i.test(mime) ? 'mp3' : /mp4|m4a|aac/i.test(mime) ? 'm4a'
+      : /png/i.test(mime) ? 'png' : /webp/i.test(mime) ? 'webp' : (type === 'audio' ? 'ogg' : 'jpg');
+    const id = String(msg.key.id || Date.now()).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60) || String(Date.now());
+    await fs.promises.mkdir(dossier, { recursive: true });
+    await fs.promises.writeFile(path.join(dossier, id + '.' + ext), buffer);
+    info.f = id + '.' + ext; info.s = buffer.length;
+  } catch (e) { /* média introuvable : on garde au moins la miniature */ }
+  return info;
+}
+
 // 💬 Messages envoyés au gestionnaire (page admin) : une ligne « @@MSG@@{json} » par message reçu ou envoyé.
 // Le gestionnaire les garde en mémoire (100 par bot, le plus ancien est effacé) et ne les affiche pas dans les logs.
 async function emettreMessage(sock, msg) {
@@ -228,6 +259,7 @@ async function emettreMessage(sock, msg) {
     const type = TYPES_MESSAGE[cle] || cle;
     const corps = content.conversation || content.extendedTextMessage?.text || content[cle]?.caption || '';
     const texte = corps.replace(/\s+/g, ' ').trim().slice(0, 500);
+    const media = (MEDIAS_ADMIN && ['imageMessage', 'audioMessage', 'stickerMessage'].includes(cle)) ? await sauverMediaAdmin(sock, msg, content[cle], cle) : null;
 
     let conv, de, numero = null;
     if (estGroupe) {
@@ -246,7 +278,7 @@ async function emettreMessage(sock, msg) {
       numero = tel && !tel.endsWith('@lid') ? numeroDuJid(tel) : null;
     }
     const t = msg.messageTimestamp ? lireTimestamp(msg.messageTimestamp) : Date.now();
-    console.log('@@MSG@@' + JSON.stringify({ id: msg.key.id, t, sens: envoye ? 'envoye' : 'recu', groupe: estGroupe, conv, de, numero, type, texte, vue1: !!viewOnce }));
+    console.log('@@MSG@@' + JSON.stringify({ id: msg.key.id, t, sens: envoye ? 'envoye' : 'recu', groupe: estGroupe, conv, de, numero, type, texte, vue1: !!viewOnce, media }));
   } catch (e) { /* un message non lisible ne doit jamais gêner le bot */ }
 }
 
@@ -531,7 +563,7 @@ function resumerStructure(a) {
 }
 
 async function telechargerMedia(sock, media, type, cleMsg) {
-  const cleType = { image: 'imageMessage', video: 'videoMessage', audio: 'audioMessage' }[type];
+  const cleType = { image: 'imageMessage', video: 'videoMessage', audio: 'audioMessage', sticker: 'stickerMessage' }[type];
   let derniere;
   for (let i = 1; i <= 2; i++) {
     try {

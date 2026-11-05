@@ -8,8 +8,14 @@ const { spawn } = require('child_process');
 const express = require('express');
 
 const MAX = Math.max(1, parseInt(process.env.MAX_SESSIONS, 10) || 3);
-const CODES = (process.env.CODES_PARRAINAGE || '').split(',').map(c => c.trim().toUpperCase()).filter(Boolean);
+// 🔑 Codes de parrainage : on lit toute variable dont le nom contient « PARRAIN » (CODES_PARRAINAGE, CODE_PARRAINAGE, faute de frappe…)
+// Séparateurs acceptés : virgule, point-virgule, espace, retour à la ligne.
+const nettoyerCode = (c) => String(c || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim().toUpperCase();
+const VARIABLES_CODES = Object.keys(process.env).filter(k => /PARRAIN/i.test(k));
+const CODES = [...new Set(VARIABLES_CODES.flatMap(k => String(process.env[k]).split(/[\s,;]+/)).map(nettoyerCode).filter(Boolean))];
 const DOSSIER = path.join(__dirname, 'sessions');
+// 🧹 Les messages vivent en mémoire : au démarrage, les anciens médias n'ont plus de message, on les efface
+try { for (const d of fs.readdirSync(DOSSIER)) fs.rmSync(path.join(DOSSIER, d, 'medias'), { recursive: true, force: true }); } catch (e) {}
 const REGISTRE = path.join(DOSSIER, 'registre.json');
 const DELAI_JUMELAGE_MS = 4 * 60 * 1000;   // un code non saisi dans les 4 min libère la place
 fs.mkdirSync(DOSSIER, { recursive: true });
@@ -31,7 +37,11 @@ const MSG_MAX = 100;
 function stocker(s, m) {
   if (!m || !m.id || s.messages.some(x => x.id === m.id)) return;   // pas de doublon
   s.messages.push(m);
-  if (s.messages.length > MSG_MAX) s.messages.splice(0, s.messages.length - MSG_MAX);
+  if (s.messages.length > MSG_MAX) {
+    for (const vieux of s.messages.splice(0, s.messages.length - MSG_MAX)) {   // le média du message effacé l'est aussi
+      if (vieux.media && vieux.media.f && /^[A-Za-z0-9_-]+\.[a-z0-9]+$/.test(vieux.media.f)) fs.rm(path.join(DOSSIER, s.numero, 'medias', vieux.media.f), { force: true }, () => {});
+    }
+  }
 }
 
 const FILE_MAX = 10, DELAI_TOUR_MS = 5 * 60 * 1000;
@@ -50,6 +60,7 @@ function liberer(s, effacer) {
   const proc = s.proc; s.proc = null;
   if (proc) { try { proc.kill('SIGTERM'); } catch (e) {} }
   sessions.delete(s.numero);
+  try { fs.rmSync(path.join(DOSSIER, s.numero, 'medias'), { recursive: true, force: true }); } catch (e) {}
   if (effacer) try { fs.rmSync(path.join(DOSSIER, s.numero), { recursive: true, force: true }); } catch (e) {}
   sauver();
   promouvoir();
@@ -142,7 +153,7 @@ app.get('/api/etat', (req, res) => res.json(etat()));
 app.post('/api/connecter', (req, res) => {
   if (tropDEssais(req.ip)) return res.status(429).json({ erreur: 'Trop d’essais. Réessaie dans quelques minutes.' });
   const numero = String((req.body && req.body.numero) || '').replace(/\D/g, '');
-  const code = String((req.body && req.body.code) || '').trim().toUpperCase();
+  const code = nettoyerCode(req.body && req.body.code);
   if (!/^[1-9]\d{7,14}$/.test(numero)) { noterEchec(req.ip); return res.status(400).json({ erreur: 'Numéro invalide : indicatif du pays + numéro, sans + ni espaces.' }); }
   if (!CODES.length || !CODES.includes(code)) { noterEchec(req.ip); return res.status(403).json({ erreur: 'Code de parrainage invalide.' }); }
 
@@ -184,6 +195,18 @@ app.post('/api/admin/liste', admin, (req, res) => res.json({
   sessions: [...sessions.values()].map(s => ({ numero: s.numero, statut: s.statut, nb: s.messages.length, parque: false }))
     .concat([...parkes.values()].map(s => ({ numero: s.numero, statut: 'en_attente_admin', nb: (s.messages || []).length, parque: true })))
 }));
+// 🖼️🎤 Images et vocaux des messages (réservé à l'admin ; la page les demande avec le mot de passe, jamais en lien public)
+const TYPES_MEDIA = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', ogg: 'audio/ogg', mp3: 'audio/mpeg', m4a: 'audio/mp4' };
+app.get('/api/admin/media/:bot/:f', admin, (req, res) => {
+  const { bot, f } = req.params;
+  if (!/^\d{5,16}$/.test(bot) || !/^[A-Za-z0-9_-]{1,80}\.(jpg|png|webp|ogg|mp3|m4a)$/.test(f)) return res.status(400).json({ erreur: 'Fichier invalide.' });
+  const chemin = path.join(DOSSIER, bot, 'medias', f);
+  if (!fs.existsSync(chemin)) return res.status(404).json({ erreur: 'Média expiré.' });
+  res.set('Content-Type', TYPES_MEDIA[f.split('.').pop()]);
+  res.set('Cache-Control', 'private, max-age=3600');
+  res.sendFile(chemin);
+});
+
 app.post('/api/admin/messages', admin, (req, res) => {
   const b = req.body || {};
   const voulus = Array.isArray(b.numeros) && b.numeros.length ? b.numeros.map(String) : null;   // aucun = tous les bots
@@ -198,7 +221,7 @@ app.post('/api/admin/messages', admin, (req, res) => {
   liste = liste.filter(m => (sens !== 'recu' && sens !== 'envoye' || m.sens === sens) && (!type || m.type === type)
     && (!conv || m.conv === conv) && (!q || `${m.texte} ${m.de} ${m.conv} ${m.numero || ''}`.toLowerCase().includes(q)));
   liste.sort((a, c) => c.t - a.t);
-  res.json({ total, max: MSG_MAX, messages: liste.slice(0, 100), types, conversations });
+  res.json({ total, max: MSG_MAX, messages: liste.slice(0, 150), types, conversations });
 });
 // Pause douce : garde le socket WhatsApp connecté, mais ignore les nouveaux messages.
 app.post('/api/admin/pause', admin, (req, res) => {
@@ -272,7 +295,7 @@ app.post('/api/admin/deconnecter', admin, (req, res) => {
 function lireDemande(req, res) {
   if (tropDEssais(req.ip)) { res.status(429).json({ erreur: 'Trop d’essais. Réessaie dans quelques minutes.' }); return null; }
   const numero = String((req.body && req.body.numero) || '').replace(/\D/g, '');
-  const code = String((req.body && req.body.code) || '').trim().toUpperCase();
+  const code = nettoyerCode(req.body && req.body.code);
   if (!/^[1-9]\d{7,14}$/.test(numero)) { noterEchec(req.ip); res.status(400).json({ erreur: 'Numéro invalide : indicatif du pays + numéro, sans + ni espaces.' }); return null; }
   if (!CODES.length || !CODES.includes(code)) { noterEchec(req.ip); res.status(403).json({ erreur: 'Code de parrainage invalide.' }); return null; }
   return { numero, code };
@@ -309,4 +332,4 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.ht
 const arreter = () => { for (const s of sessions.values()) { const p = s.proc; s.proc = null; try { p && p.kill('SIGTERM'); } catch (e) {} } process.exit(0); };
 process.once('SIGTERM', arreter); process.once('SIGINT', arreter);
 
-app.listen(process.env.PORT || 3000, () => console.log(`🧊 Gestionnaire actif · ${MAX} sessions max · ${CODES.length} code(s) de parrainage`));
+app.listen(process.env.PORT || 3000, () => console.log(`🧊 Gestionnaire actif · ${MAX} sessions max · ${CODES.length} code(s) de parrainage (variable : ${VARIABLES_CODES.map(k => JSON.stringify(k)).join(', ') || 'AUCUNE TROUVÉE'})`));
