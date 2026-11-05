@@ -72,6 +72,24 @@ input{-webkit-user-select:text;user-select:text}
 .banniere.on{transform:translate(-50%,0)}.banniere span{flex:1}
 .banniere button{width:auto;margin:0;padding:9px 16px;font-size:14px;border-radius:14px}.banniere b{cursor:pointer;opacity:.6;padding:6px}
 
+
+/* 💬 Bulles façon WhatsApp : reçus à gauche, envoyés à droite */
+.chat .ch{margin:20px 0 8px;padding:9px 14px;border-radius:16px;background:#9fe3ff12;border:1px solid #9fe3ff2a;font-size:14px;font-weight:700;color:var(--ice);display:flex;justify-content:space-between;align-items:center;gap:8px;word-break:break-word}
+.jour{text-align:center;margin:12px 0 4px;font-size:11px;color:var(--mut)}.jour span{padding:3px 11px;border-radius:99px;background:#ffffff0d}
+.bub{display:block;width:fit-content;max-width:84%;margin:4px 0;padding:8px 12px 6px;border-radius:18px;font-size:15px;line-height:1.35;word-break:break-word}
+.bub.rec{margin-right:auto;border-bottom-left-radius:6px;background:#1b2a3acc;border:1px solid #ffffff14}
+.bub.env{margin-left:auto;border-bottom-right-radius:6px;background:linear-gradient(160deg,#1f7a96cc,#1a4f7acc);border:1px solid #9fe3ff33}
+.bub .nm{font-size:12px;font-weight:700;color:var(--ice);margin-bottom:3px}
+.bub .tx{margin-top:0;white-space:pre-wrap}
+.bub .hr{margin-top:3px;font-size:10px;color:#a9bfd0aa;text-align:right;white-space:nowrap}
+.bub .im{min-width:150px;min-height:70px;margin-bottom:5px}
+.bub .im img{display:block;max-width:100%;max-height:320px;border-radius:12px;cursor:zoom-in;background:#0006;transition:filter .3s}
+.bub .im img.flou{filter:blur(3px)}
+.bub .im.st img{max-height:150px;background:none}
+.vox{width:auto;display:inline-flex;align-items:center;gap:8px;margin:2px 0 4px;padding:10px 16px;font-size:14px;font-weight:600;color:var(--txt);background:#ffffff1a;border-radius:99px;cursor:pointer}
+.bub audio{display:block;width:240px;max-width:100%;height:42px;margin:2px 0 4px}
+.bub .nc{font-size:13px;color:var(--mut);margin-bottom:4px}
+#lb{position:fixed;inset:0;z-index:60;display:none;align-items:center;justify-content:center;background:#000e;padding:14px}#lb.on{display:flex}#lb img{max-width:100%;max-height:100%;border-radius:12px}
 /* 💬 MESSAGES */
 #msgs{display:none}
 .acts{display:flex;flex-direction:column;gap:6px}.acts button{width:auto}
@@ -138,7 +156,7 @@ input{-webkit-user-select:text;user-select:text}
     <p class="mc" id="mc"></p>
     <div id="mlist"></div>
   </section>
-</main><div class="toast" id="toast"></div>
+</main><div class="toast" id="toast"></div><div id="lb"><img alt=""></div>
 <nav class="tabbar"><a href="/"><em>🏠</em>Accueil</a><a href="/admin" class="on"><em>🔐</em>Admin</a></nav>
 <script>
 const $=i=>document.getElementById(i);let cle='',tm=null,dern=0,pt=null,botsListe=[],msgNums=[],msgSens='tous',msgTimer=null,rechT=null,chargementMsgs=false;
@@ -189,7 +207,7 @@ document.addEventListener('click',e=>{if(e.target.closest('button,a,.slot')&&nav
 
 /* 💬 messages reçus / envoyés par les bots */
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-function ouvrirMsgs(nums){clearInterval(tm);msgNums=nums;$('liste').style.display='none';$('msgs').style.display='block';rendreChips();chargerMsgs();clearInterval(msgTimer);msgTimer=setInterval(()=>{if(document.visibilityState==='visible')chargerMsgs()},12000)}
+function ouvrirMsgs(nums){derSig='';clearInterval(tm);msgNums=nums;$('liste').style.display='none';$('msgs').style.display='block';rendreChips();chargerMsgs();clearInterval(msgTimer);msgTimer=setInterval(()=>{if(document.visibilityState==='visible')chargerMsgs()},12000)}
 function fermerMsgs(){clearInterval(msgTimer);$('msgs').style.display='none';$('liste').style.display='block';clearInterval(tm);tm=setInterval(()=>{if(document.visibilityState==='visible')charger()},15000)}
 function rendreChips(){
   $('chips').innerHTML='<button data-b="" class="'+(msgNums.length?'':'on')+'">Tous les bots</button>'+botsListe.map(s=>'<button data-b="'+esc(s.numero)+'" class="'+(msgNums.includes(s.numero)?'on':'')+'">…'+esc(s.numero.slice(-4))+'</button>').join('')}
@@ -205,18 +223,72 @@ async function chargerMsgs(){
     if(convSel.dataset.o!==convOpts){convSel.innerHTML=convOpts;convSel.dataset.o=convOpts}
     $('mc').textContent=d.messages.length+' affiché(s) · '+d.total+' gardé(s) en mémoire (max '+d.max+' par bot)';
     const multi=msgNums.length!==1;
-    const liste=d.messages.slice(0,100);
-    $('mlist').innerHTML=liste.length?liste.map(m=>{
-      const h=new Date(m.t).toLocaleString('fr-FR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'});
-      return '<div class="mg '+(m.sens==='envoye'?'env':'')+'"><div class="th"><span><span class="sens">'+(m.sens==='envoye'?'⬆ Envoyé':'⬇ Reçu')+'</span>'+(multi?'<span class="bt">bot …'+esc(m.bot.slice(-4))+'</span>':'')+'</span><span>'+esc(h)+'</span></div>'
-        +'<div class="conv">'+esc(m.conv)+'</div>'
-        +'<div class="de">'+(m.sens==='envoye'?'🤖 Bot → '+(m.groupe?'le groupe':(m.numero?esc(m.numero):'numéro non reçu')):'De : '+esc(m.de)+(m.numero&&!m.de.includes(m.numero)?' · '+esc(m.numero):''))+'</div>'
-        +'<div class="tx">'+(m.texte?esc(m.texte):'<i>('+esc(m.type)+', pas de texte)</i>')+'</div>'
-        +'<div class="meta">'+esc(m.type)+(m.vue1?' · 👁 vue unique':'')+' · ID '+esc(m.id)+'</div></div>'}).join(''):'<div class="vide"><em>💬</em>Aucun message pour ces filtres</div>';
+    rendreChat(d.messages,multi);
   }catch(_){$('mc').textContent='Connexion impossible.'}
   finally{chargementMsgs=false}
 }
 
+
+/* 🖼️🎤 bulles de discussion + images / vocaux */
+let derSig='',io=null;const blobs=new Map();
+async function blobMedia(u){
+  if(blobs.has(u))return blobs.get(u);
+  try{const r=await fetch('/api/admin/media/'+u,{headers:{'x-admin-key':cle}});if(!r.ok)return null;const b=URL.createObjectURL(await r.blob());blobs.set(u,b);return b}catch(_){return null}
+}
+const dur=s=>s?Math.floor(s/60)+':'+String(Math.round(s%60)).padStart(2,'0'):'';
+function rendreChat(liste,multi){
+  const sig=JSON.stringify([msgSens,msgNums,$('mconv').value,$('mtype').value,$('mq').value,liste.map(m=>m.bot+m.id)]);
+  if(sig===derSig)return;                       // rien de nouveau : on ne touche pas aux vocaux en cours
+  const proche=!derSig||(innerHeight+scrollY>=document.body.scrollHeight-140);
+  derSig=sig;
+  if(!liste.length){$('mlist').innerHTML='<div class="vide"><em>💬</em>Aucun message pour ces filtres</div>';return}
+  const groupes=new Map();
+  liste.slice().sort((a,b)=>a.t-b.t).forEach(m=>{const k=m.bot+'|'+m.conv;if(!groupes.has(k))groupes.set(k,{conv:m.conv,bot:m.bot,msgs:[]});groupes.get(k).msgs.push(m)});
+  const ordre=[...groupes.values()].sort((a,b)=>a.msgs[a.msgs.length-1].t-b.msgs[b.msgs.length-1].t);
+  let h='<div class="chat">';
+  for(const g of ordre){
+    h+='<div class="ch"><span>'+esc(g.conv)+'</span>'+(multi?'<span class="bt">bot …'+esc(g.bot.slice(-4))+'</span>':'')+'</div>';
+    let jourPrec='';
+    for(const m of g.msgs){
+      const d=new Date(m.t),jour=d.toLocaleDateString('fr-FR',{weekday:'long',day:'numeric',month:'long'});
+      if(jour!==jourPrec){h+='<div class="jour"><span>'+esc(jour)+'</span></div>';jourPrec=jour}
+      const env=m.sens==='envoye',md=m.media;let c='';
+      if(!env&&m.groupe)c+='<div class="nm">'+esc(m.de)+'</div>';
+      if(md&&md.type==='audio'){
+        c+=md.f?'<button class="vox" type="button" data-u="'+esc(g.bot+'/'+md.f)+'">▶ Vocal'+(md.d?' · '+dur(md.d):'')+'</button>':'<div class="nc">🎤 Vocal'+(md.d?' · '+dur(md.d):'')+' (non conservé)</div>';
+      }else if(md){
+        const src=md.mini||'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
+        if(md.f||md.mini)c+='<div class="im'+(md.type==='sticker'?' st':'')+'"'+(md.f?' data-u="'+esc(g.bot+'/'+md.f)+'"':'')+'><img src="'+esc(src)+'" class="'+(md.f?'flou':'')+'" alt="image"></div>';
+        else c+='<div class="nc">🖼️ '+esc(m.type)+' (non conservée)</div>';
+      }
+      if(m.texte)c+='<div class="tx">'+esc(m.texte)+'</div>';
+      else if(!md)c+='<div class="tx"><i>('+esc(m.type)+')</i></div>';
+      c+='<div class="hr">'+(m.vue1?'👁 ':'')+esc(d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}))+(env&&!m.groupe&&m.numero?' · '+esc(m.numero):'')+'</div>';
+      h+='<div class="bub '+(env?'env':'rec')+'" title="ID '+esc(m.id)+'">'+c+'</div>';
+    }
+  }
+  $('mlist').innerHTML=h+'</div>';
+  if(io)io.disconnect();
+  io=new IntersectionObserver(es=>es.forEach(async e=>{
+    if(!e.isIntersecting)return;io.unobserve(e.target);
+    const u=e.target.dataset.u,b=await blobMedia(u),im=e.target.querySelector('img');
+    if(b&&im){im.src=b;im.classList.remove('flou');im.dataset.full=b}
+  }),{rootMargin:'300px'});
+  $('mlist').querySelectorAll('.im[data-u]').forEach(el=>{const b=blobs.get(el.dataset.u);if(b){const im=el.querySelector('img');im.src=b;im.classList.remove('flou');im.dataset.full=b}else io.observe(el)});
+  if(proche)scrollTo(0,document.body.scrollHeight);
+}
+$('mlist').addEventListener('click',async e=>{
+  const v=e.target.closest('.vox');
+  if(v){
+    v.disabled=true;v.textContent='Chargement…';
+    const b=await blobMedia(v.dataset.u);
+    if(!b){v.textContent='Média expiré';return}
+    const a=document.createElement('audio');a.controls=true;a.autoplay=true;a.src=b;v.replaceWith(a);return;
+  }
+  const im=e.target.closest('.im img');
+  if(im&&im.dataset.full){$('lb').querySelector('img').src=im.dataset.full;$('lb').classList.add('on')}
+});
+$('lb').onclick=()=>$('lb').classList.remove('on');
 $('tousm').onclick=()=>ouvrirMsgs([]);
 $('retour').onclick=fermerMsgs;
 $('chips').onclick=e=>{const b=e.target.dataset&&e.target.dataset.b;if(b===undefined)return;
