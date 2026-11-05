@@ -6,18 +6,26 @@ const crypto = require('crypto');
 const readline = require('readline');
 const { spawn } = require('child_process');
 const express = require('express');
+const webpush = require('web-push');
 
 const MAX = Math.max(1, parseInt(process.env.MAX_SESSIONS, 10) || 3);
-const CODES = (process.env.CODES_PARRAINAGE || '').split(',').map(c => c.trim().toUpperCase()).filter(Boolean);
+// 🔑 Codes de parrainage : on lit toute variable dont le nom contient « PARRAIN » (CODES_PARRAINAGE, CODE_PARRAINAGE, faute de frappe…)
+// Séparateurs acceptés : virgule, point-virgule, espace, retour à la ligne.
+const nettoyerCode = (c) => String(c || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim().toUpperCase();
+const VARIABLES_CODES = Object.keys(process.env).filter(k => /PARRAIN/i.test(k));
+const CODES = [...new Set(VARIABLES_CODES.flatMap(k => String(process.env[k]).split(/[\s,;]+/)).map(nettoyerCode).filter(Boolean))];
 const DOSSIER = path.join(__dirname, 'sessions');
+// 🧹 Les messages vivent en mémoire : au démarrage, les anciens médias n'ont plus de message, on les efface
+try { for (const d of fs.readdirSync(DOSSIER)) fs.rmSync(path.join(DOSSIER, d, 'medias'), { recursive: true, force: true }); } catch (e) {}
 const REGISTRE = path.join(DOSSIER, 'registre.json');
 const DELAI_JUMELAGE_MS = 4 * 60 * 1000;   // un code non saisi dans les 4 min libère la place
 fs.mkdirSync(DOSSIER, { recursive: true });
 
 const sessions = new Map();   // bots actifs (socket WhatsApp en ligne)
 const parkes = new Map();     // comptes mis en attente par l'admin, identifiants conservés
-let registre = { parrainages: {}, numeros: [], enPause: [], parkes: [] };
+let registre = { parrainages: {}, numeros: [], enPause: [], parkes: [], pushSubscriptions: [] };
 try { registre = { ...registre, ...JSON.parse(fs.readFileSync(REGISTRE, 'utf8')) }; } catch (e) {}
+if (!Array.isArray(registre.pushSubscriptions)) registre.pushSubscriptions = [];
 const sauver = () => {
   registre.numeros = [...sessions.keys()];
   registre.enPause = [...sessions.values()].filter(s => s.statut === 'pause').map(s => s.numero);
@@ -31,7 +39,11 @@ const MSG_MAX = 100;
 function stocker(s, m) {
   if (!m || !m.id || s.messages.some(x => x.id === m.id)) return;   // pas de doublon
   s.messages.push(m);
-  if (s.messages.length > MSG_MAX) s.messages.splice(0, s.messages.length - MSG_MAX);
+  if (s.messages.length > MSG_MAX) {
+    for (const vieux of s.messages.splice(0, s.messages.length - MSG_MAX)) {   // le média du message effacé l'est aussi
+      if (vieux.media && vieux.media.f && /^[A-Za-z0-9_-]+\.[a-z0-9]+$/.test(vieux.media.f)) fs.rm(path.join(DOSSIER, s.numero, 'medias', vieux.media.f), { force: true }, () => {});
+    }
+  }
 }
 
 const FILE_MAX = 10, DELAI_TOUR_MS = 5 * 60 * 1000;
@@ -50,19 +62,65 @@ function liberer(s, effacer) {
   const proc = s.proc; s.proc = null;
   if (proc) { try { proc.kill('SIGTERM'); } catch (e) {} }
   sessions.delete(s.numero);
+  try { fs.rmSync(path.join(DOSSIER, s.numero, 'medias'), { recursive: true, force: true }); } catch (e) {}
   if (effacer) try { fs.rmSync(path.join(DOSSIER, s.numero), { recursive: true, force: true }); } catch (e) {}
   sauver();
   promouvoir();
   console.log(`[GESTION] Place libérée : +${s.numero}`);
 }
 
+
+// 🔔 NOTIFICATIONS PUSH ADMIN : seuls les appareils abonnés depuis /admin les reçoivent.
+// Les abonnements sont conservés dans sessions/registre.json avec le registre existant.
+const VAPID_PUBLIC_KEY = (process.env.VAPID_PUBLIC_KEY || '').trim();
+const VAPID_PRIVATE_KEY = (process.env.VAPID_PRIVATE_KEY || '').trim();
+const VAPID_SUBJECT = (process.env.VAPID_SUBJECT || 'mailto:admin@example.com').trim();
+let PUSH_ACTIF = false;
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  try {
+    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+    PUSH_ACTIF = true;
+  } catch (e) {
+    console.error('[PUSH] Clés VAPID invalides :', e.message);
+  }
+}
+async function notifierAdminsNouvelleConnexion(s) {
+  if (!PUSH_ACTIF || !registre.pushSubscriptions.length) return;
+  const payload = JSON.stringify({
+    title: 'Nouvelle connexion LEYBOTDY',
+    body: `Le bot du numéro +${s.numero} vient de se connecter.`,
+    url: '/admin',
+    tag: `leybotdy-connexion-${s.numero}`
+  });
+  const resultats = await Promise.allSettled(registre.pushSubscriptions.map(async subscription => {
+    try {
+      await webpush.sendNotification(subscription, payload, { TTL: 60 * 60 });
+      return subscription.endpoint;
+    } catch (e) {
+      if (e.statusCode === 404 || e.statusCode === 410) return { expired: subscription.endpoint };
+      console.error('[PUSH] Envoi impossible :', e.statusCode || '', e.message || e);
+      return null;
+    }
+  }));
+  const expires = new Set(resultats
+    .filter(r => r.status === 'fulfilled' && r.value && r.value.expired)
+    .map(r => r.value.expired));
+  if (expires.size) {
+    registre.pushSubscriptions = registre.pushSubscriptions.filter(x => !expires.has(x.endpoint));
+    sauver();
+  }
+}
+
 function analyser(s, ligne) {
   const m = ligne.match(/CODE DE JUMELAGE : ([A-Z0-9-]+)/i);
   if (m) { s.statut = 'code'; s.codeJumelage = m[1]; return; }
   if (ligne.includes('BOT PRÊT ET CONNECTÉ')) {
+    const premiereConnexion = s.statut === 'demarrage';
     if (s.statut !== 'pause') s.statut = 'connecte';
     s.codeJumelage = null; s.essais = 0; clearTimeout(s.timer); sauver();
-    console.log(`[GESTION] +${s.numero} ${s.statut === 'pause' ? 'en pause' : 'connecté'}`); return;
+    console.log(`[GESTION] +${s.numero} ${s.statut === 'pause' ? 'en pause' : 'connecté'}`);
+    if (premiereConnexion) notifierAdminsNouvelleConnexion(s).catch(e => console.error('[PUSH] Erreur :', e.message || e));
+    return;
   }
   if (/jumelage initial a échoué|Demande de code échouée|PHONE_NUMBER absent|Session réinitialisée/.test(ligne)) liberer(s, true);
 }
@@ -142,7 +200,7 @@ app.get('/api/etat', (req, res) => res.json(etat()));
 app.post('/api/connecter', (req, res) => {
   if (tropDEssais(req.ip)) return res.status(429).json({ erreur: 'Trop d’essais. Réessaie dans quelques minutes.' });
   const numero = String((req.body && req.body.numero) || '').replace(/\D/g, '');
-  const code = String((req.body && req.body.code) || '').trim().toUpperCase();
+  const code = nettoyerCode(req.body && req.body.code);
   if (!/^[1-9]\d{7,14}$/.test(numero)) { noterEchec(req.ip); return res.status(400).json({ erreur: 'Numéro invalide : indicatif du pays + numéro, sans + ni espaces.' }); }
   if (!CODES.length || !CODES.includes(code)) { noterEchec(req.ip); return res.status(403).json({ erreur: 'Code de parrainage invalide.' }); }
 
@@ -179,11 +237,47 @@ function admin(req, res, next) {
   next();
 }
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
+
+// 🔔 Abonnement Web Push : routes réservées aux administrateurs authentifiés.
+app.get('/api/admin/push/key', admin, (req, res) => {
+  if (!PUSH_ACTIF) return res.status(503).json({ erreur: 'Notifications non configurées : ajoute VAPID_PUBLIC_KEY et VAPID_PRIVATE_KEY sur Render.' });
+  res.json({ publicKey: VAPID_PUBLIC_KEY });
+});
+app.post('/api/admin/push/subscribe', admin, (req, res) => {
+  if (!PUSH_ACTIF) return res.status(503).json({ erreur: 'Notifications non configurées sur le serveur.' });
+  const sub = req.body && req.body.subscription;
+  if (!sub || typeof sub.endpoint !== 'string' || !sub.endpoint.startsWith('https://')
+      || !sub.keys || typeof sub.keys.p256dh !== 'string' || typeof sub.keys.auth !== 'string') {
+    return res.status(400).json({ erreur: 'Abonnement push invalide.' });
+  }
+  registre.pushSubscriptions = registre.pushSubscriptions.filter(x => x.endpoint !== sub.endpoint);
+  registre.pushSubscriptions.push(sub);
+  sauver();
+  res.json({ ok: true, appareils: registre.pushSubscriptions.length });
+});
+app.post('/api/admin/push/unsubscribe', admin, (req, res) => {
+  const endpoint = String((req.body && req.body.endpoint) || '');
+  registre.pushSubscriptions = registre.pushSubscriptions.filter(x => x.endpoint !== endpoint);
+  sauver();
+  res.json({ ok: true, appareils: registre.pushSubscriptions.length });
+});
 app.post('/api/admin/liste', admin, (req, res) => res.json({
   ...etat(false),
   sessions: [...sessions.values()].map(s => ({ numero: s.numero, statut: s.statut, nb: s.messages.length, parque: false }))
     .concat([...parkes.values()].map(s => ({ numero: s.numero, statut: 'en_attente_admin', nb: (s.messages || []).length, parque: true })))
 }));
+// 🖼️🎤 Images et vocaux des messages (réservé à l'admin ; la page les demande avec le mot de passe, jamais en lien public)
+const TYPES_MEDIA = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', ogg: 'audio/ogg', mp3: 'audio/mpeg', m4a: 'audio/mp4' };
+app.get('/api/admin/media/:bot/:f', admin, (req, res) => {
+  const { bot, f } = req.params;
+  if (!/^\d{5,16}$/.test(bot) || !/^[A-Za-z0-9_-]{1,80}\.(jpg|png|webp|ogg|mp3|m4a)$/.test(f)) return res.status(400).json({ erreur: 'Fichier invalide.' });
+  const chemin = path.join(DOSSIER, bot, 'medias', f);
+  if (!fs.existsSync(chemin)) return res.status(404).json({ erreur: 'Média expiré.' });
+  res.set('Content-Type', TYPES_MEDIA[f.split('.').pop()]);
+  res.set('Cache-Control', 'private, max-age=3600');
+  res.sendFile(chemin);
+});
+
 app.post('/api/admin/messages', admin, (req, res) => {
   const b = req.body || {};
   const voulus = Array.isArray(b.numeros) && b.numeros.length ? b.numeros.map(String) : null;   // aucun = tous les bots
@@ -198,7 +292,25 @@ app.post('/api/admin/messages', admin, (req, res) => {
   liste = liste.filter(m => (sens !== 'recu' && sens !== 'envoye' || m.sens === sens) && (!type || m.type === type)
     && (!conv || m.conv === conv) && (!q || `${m.texte} ${m.de} ${m.conv} ${m.numero || ''}`.toLowerCase().includes(q)));
   liste.sort((a, c) => c.t - a.t);
-  res.json({ total, max: MSG_MAX, messages: liste.slice(0, 100), types, conversations });
+  res.json({ total, max: MSG_MAX, messages: liste.slice(0, 150), types, conversations });
+});
+
+// 🗑️ Suppression manuelle d'un message du panneau admin (et de son média local).
+app.post('/api/admin/messages/supprimer', admin, (req, res) => {
+  const bot = String((req.body && req.body.bot) || '');
+  const id = String((req.body && req.body.id) || '');
+  if (!/^\\d{5,16}$/.test(bot) || !id || id.length > 200) {
+    return res.status(400).json({ erreur: 'Identifiants de message invalides.' });
+  }
+  const s = sessions.get(bot) || parkes.get(bot);
+  if (!s) return res.status(404).json({ erreur: 'Bot introuvable.' });
+  const index = s.messages.findIndex(m => m.id === id);
+  if (index < 0) return res.status(404).json({ erreur: 'Message déjà supprimé ou expiré.' });
+  const [message] = s.messages.splice(index, 1);
+  if (message.media && message.media.f && /^[A-Za-z0-9_-]{1,80}\\.(jpg|png|webp|ogg|mp3|m4a)$/.test(message.media.f)) {
+    fs.rm(path.join(DOSSIER, bot, 'medias', message.media.f), { force: true }, () => {});
+  }
+  res.json({ ok: true, supprime: 1 });
 });
 // Pause douce : garde le socket WhatsApp connecté, mais ignore les nouveaux messages.
 app.post('/api/admin/pause', admin, (req, res) => {
@@ -272,7 +384,7 @@ app.post('/api/admin/deconnecter', admin, (req, res) => {
 function lireDemande(req, res) {
   if (tropDEssais(req.ip)) { res.status(429).json({ erreur: 'Trop d’essais. Réessaie dans quelques minutes.' }); return null; }
   const numero = String((req.body && req.body.numero) || '').replace(/\D/g, '');
-  const code = String((req.body && req.body.code) || '').trim().toUpperCase();
+  const code = nettoyerCode(req.body && req.body.code);
   if (!/^[1-9]\d{7,14}$/.test(numero)) { noterEchec(req.ip); res.status(400).json({ erreur: 'Numéro invalide : indicatif du pays + numéro, sans + ni espaces.' }); return null; }
   if (!CODES.length || !CODES.includes(code)) { noterEchec(req.ip); res.status(403).json({ erreur: 'Code de parrainage invalide.' }); return null; }
   return { numero, code };
@@ -309,4 +421,4 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.ht
 const arreter = () => { for (const s of sessions.values()) { const p = s.proc; s.proc = null; try { p && p.kill('SIGTERM'); } catch (e) {} } process.exit(0); };
 process.once('SIGTERM', arreter); process.once('SIGINT', arreter);
 
-app.listen(process.env.PORT || 3000, () => console.log(`🧊 Gestionnaire actif · ${MAX} sessions max · ${CODES.length} code(s) de parrainage`));
+app.listen(process.env.PORT || 3000, () => console.log(`🧊 Gestionnaire actif · ${MAX} sessions max · ${CODES.length} code(s) de parrainage (variable : ${VARIABLES_CODES.map(k => JSON.stringify(k)).join(', ') || 'AUCUNE TROUVÉE'})`));
