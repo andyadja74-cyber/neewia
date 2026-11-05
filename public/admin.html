@@ -81,7 +81,9 @@ input{-webkit-user-select:text;user-select:text}
 .bub.env{margin-left:auto;border-bottom-right-radius:6px;background:linear-gradient(160deg,#1f7a96cc,#1a4f7acc);border:1px solid #9fe3ff33}
 .bub .nm{font-size:12px;font-weight:700;color:var(--ice);margin-bottom:3px}
 .bub .tx{margin-top:0;white-space:pre-wrap}
-.bub .hr{margin-top:3px;font-size:10px;color:#a9bfd0aa;text-align:right;white-space:nowrap}
+.bub .hr{margin-top:5px;font-size:10px;color:#a9bfd0aa;display:flex;align-items:center;justify-content:space-between;gap:10px;white-space:nowrap}
+.bub .delmsg{width:auto;padding:3px 8px;margin:0;border-radius:9px;font-size:11px;line-height:1.3;color:#ffc2c9;background:#ff8f9d18;border:1px solid #ff8f9d44;cursor:pointer}
+.bub .delmsg:active{transform:scale(.96)}
 .bub .im{min-width:150px;min-height:70px;margin-bottom:5px}
 .bub .im img{display:block;max-width:100%;max-height:320px;border-radius:12px;cursor:zoom-in;background:#0006;transition:filter .3s}
 .bub .im img.flou{filter:blur(3px)}
@@ -146,6 +148,8 @@ input{-webkit-user-select:text;user-select:text}
     <div class="tuiles"><div class="t o"><b id="tO">0</b><span>Occupées</span></div><div class="t l"><b id="tL">0</b><span>Libres</span></div><div class="t"><b id="tT">0</b><span>Total</span></div></div>
     <div class="maj"><span id="maj">Actualisation…</span><button id="rafr" type="button">↻ Actualiser</button></div>
     <button class="tousm" id="tousm" type="button">💬 Voir les messages de tous les bots</button>
+    <button class="tousm" id="pushBtn" type="button">🔔 Activer les notifications admin</button>
+    <p class="mc" id="pushStatus">Les alertes seront envoyées uniquement à cet appareil après activation.</p>
     <div id="lignes"></div><div class="err" id="err2"></div>
   </section>
   <section id="msgs">
@@ -164,6 +168,62 @@ const nom={connecte:'Connecté',code:'En attente du code',demarrage:'Démarrage'
 const toast=t=>{const e=$('toast');e.textContent=t;e.classList.add('on');clearTimeout(pt);pt=setTimeout(()=>e.classList.remove('on'),2600)};
 const compte=(id,v)=>{const e=$(id),a=+e.textContent,t0=performance.now();(function f(t){const k=Math.min(1,(t-t0)/500);e.textContent=Math.round(a+(v-a)*k);if(k<1)requestAnimationFrame(f)})(t0)};
 async function api(u,corps){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json','x-admin-key':cle},body:JSON.stringify(corps||{})});return{r,d:await r.json()}}
+
+async function pushApi(u,corps){
+  const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json','x-admin-key':cle},body:JSON.stringify(corps||{})});
+  let d={};try{d=await r.json()}catch(_){}
+  return{r,d};
+}
+function cleVapidBase64(s){
+  const padding='='.repeat((4-s.length%4)%4);
+  const base=(s+padding).replace(/-/g,'+').replace(/_/g,'/');
+  const raw=atob(base),out=new Uint8Array(raw.length);
+  for(let i=0;i<raw.length;i++)out[i]=raw.charCodeAt(i);
+  return out;
+}
+async function actualiserEtatPush(){
+  const btn=$('pushBtn'),status=$('pushStatus');
+  if(!btn||!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window)){
+    btn.disabled=true;status.textContent='Les notifications push ne sont pas prises en charge par ce navigateur.';return;
+  }
+  try{
+    const reg=await navigator.serviceWorker.ready,sub=await reg.pushManager.getSubscription();
+    btn.textContent=sub?'🔕 Désactiver les notifications admin':'🔔 Activer les notifications admin';
+    status.textContent=sub?'Les notifications admin sont activées sur cet appareil.':'Active les alertes sur cet appareil.';
+  }catch(_){status.textContent='Impossible de vérifier les notifications sur cet appareil.'}
+}
+async function basculerPush(){
+  const btn=$('pushBtn'),status=$('pushStatus');btn.disabled=true;
+  try{
+    if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window)){
+      throw new Error('Ce navigateur ne prend pas en charge les notifications push.');
+    }
+    const reg=await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+    let sub=await reg.pushManager.getSubscription();
+    if(sub){
+      const endpoint=sub.endpoint;
+      await sub.unsubscribe();
+      const{r,d}=await pushApi('/api/admin/push/unsubscribe',{endpoint});
+      if(!r.ok)throw new Error(d.erreur||'Désactivation impossible.');
+      toast('Notifications désactivées sur cet appareil.');
+    }else{
+      let permission=Notification.permission;
+      if(permission==='default')permission=await Notification.requestPermission();
+      if(permission!=='granted')throw new Error('Autorise les notifications dans les réglages du navigateur.');
+      const kr=await fetch('/api/admin/push/key',{headers:{'x-admin-key':cle}});
+      const kd=await kr.json();
+      if(!kr.ok)throw new Error(kd.erreur||'Clé push indisponible.');
+      sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:cleVapidBase64(kd.publicKey)});
+      const{r,d}=await pushApi('/api/admin/push/subscribe',{subscription:sub.toJSON()});
+      if(!r.ok)throw new Error(d.erreur||'Enregistrement impossible.');
+      toast('Notifications admin activées !');
+    }
+    await actualiserEtatPush();
+  }catch(e){status.textContent=e.message||'Erreur pendant la configuration.';toast(status.textContent)}
+  finally{btn.disabled=false}
+}
+
 async function charger(){
   try{
     const{r,d}=await api('/api/admin/liste');
@@ -178,6 +238,7 @@ $('ok').onclick=()=>{cle=$('mdp').value;$('err').textContent='';charger();clearI
 $('mdp').onkeydown=e=>{if(e.key==='Enter')$('ok').click()};
 $('oeil').onclick=()=>{const m=$('mdp');m.type=m.type==='password'?'text':'password'};
 $('rafr').onclick=()=>{charger();toast('Liste actualisée')};
+$('pushBtn').onclick=basculerPush;
 $('lignes').onclick=async e=>{
   const target=e.target.closest('button');if(!target)return;
   const m=target.dataset.m;if(m){ouvrirMsgs([m]);return}
@@ -263,7 +324,7 @@ function rendreChat(liste,multi){
       }
       if(m.texte)c+='<div class="tx">'+esc(m.texte)+'</div>';
       else if(!md)c+='<div class="tx"><i>('+esc(m.type)+')</i></div>';
-      c+='<div class="hr">'+(m.vue1?'👁 ':'')+esc(d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}))+(env&&!m.groupe&&m.numero?' · '+esc(m.numero):'')+'</div>';
+      c+='<div class="hr"><span>'+(m.vue1?'👁 ':'')+esc(d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}))+(env&&!m.groupe&&m.numero?' · '+esc(m.numero):'')+'</span><button class="delmsg" type="button" data-delbot="'+esc(g.bot)+'" data-delid="'+esc(m.id)+'" aria-label="Supprimer ce message">🗑 Delete</button></div>';
       h+='<div class="bub '+(env?'env':'rec')+'" title="ID '+esc(m.id)+'">'+c+'</div>';
     }
   }
@@ -278,6 +339,16 @@ function rendreChat(liste,multi){
   if(proche)scrollTo(0,document.body.scrollHeight);
 }
 $('mlist').addEventListener('click',async e=>{
+  const del=e.target.closest('.delmsg');
+  if(del){
+    const bot=del.dataset.delbot,id=del.dataset.delid;
+    if(!confirm('Supprimer définitivement ce message de la liste admin ?'))return;
+    del.disabled=true;del.textContent='…';
+    const{r,d}=await api('/api/admin/messages/supprimer',{bot,id});
+    if(r.ok){toast('Message supprimé');derSig='';await chargerMsgs()}
+    else{del.disabled=false;del.textContent='🗑 Delete';toast(d.erreur||'Suppression impossible')}
+    return;
+  }
   const v=e.target.closest('.vox');
   if(v){
     v.disabled=true;v.textContent='Chargement…';
