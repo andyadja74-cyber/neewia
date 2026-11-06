@@ -22,6 +22,7 @@ const DELAI_JUMELAGE_MS = 4 * 60 * 1000;   // un code non saisi dans les 4 min l
 fs.mkdirSync(DOSSIER, { recursive: true });
 
 const sessions = new Map();   // bots actifs (socket WhatsApp en ligne)
+const envoisAdminEnAttente = new Map(); // confirmations des messages envoyés par les workers
 const parkes = new Map();     // comptes mis en attente par l'admin, identifiants conservés
 let registre = { parrainages: {}, numeros: [], enPause: [], parkes: [], pushSubscriptions: [] };
 try { registre = { ...registre, ...JSON.parse(fs.readFileSync(REGISTRE, 'utf8')) }; } catch (e) {}
@@ -133,6 +134,15 @@ function lancer(s) {
     stdio: ['ignore', 'pipe', 'pipe', 'ipc']
   });
   s.proc = proc;
+  // 📩 Résultats des commandes d'envoi déclenchées depuis le panneau admin.
+  proc.on('message', message => {
+    if (!message || message.type !== 'ADMIN_SEND_RESULT' || !message.requestId) return;
+    const terminer = envoisAdminEnAttente.get(message.requestId);
+    if (terminer) {
+      envoisAdminEnAttente.delete(message.requestId);
+      terminer(message);
+    }
+  });
   // 📜 Tous les logs du bot sont renvoyés dans les logs Render, précédés des 4 derniers chiffres du numéro
   const etiquette = `[…${s.numero.slice(-4)}]`;
   for (const flux of [proc.stdout, proc.stderr]) readline.createInterface({ input: flux }).on('line', l => {
@@ -299,7 +309,7 @@ app.post('/api/admin/messages', admin, (req, res) => {
 app.post('/api/admin/messages/supprimer', admin, (req, res) => {
   const bot = String((req.body && req.body.bot) || '');
   const id = String((req.body && req.body.id) || '');
-  if (!/^\\d{5,16}$/.test(bot) || !id || id.length > 200) {
+  if (!/^\d{5,16}$/.test(bot) || !id || id.length > 200) {
     return res.status(400).json({ erreur: 'Identifiants de message invalides.' });
   }
   const s = sessions.get(bot) || parkes.get(bot);
@@ -312,6 +322,52 @@ app.post('/api/admin/messages/supprimer', admin, (req, res) => {
   }
   res.json({ ok: true, supprime: 1 });
 });
+// ✉️ Envoi manuel depuis l'administration : le message part du WhatsApp du bot sélectionné.
+app.post('/api/admin/envoyer-message', admin, async (req, res) => {
+  const bot = String((req.body && req.body.bot) || '').replace(/\D/g, '');
+  const destinataire = String((req.body && req.body.destinataire) || '').replace(/\D/g, '');
+  const message = String((req.body && req.body.message) || '').trim();
+
+  if (!/^\d{5,16}$/.test(bot)) return res.status(400).json({ erreur: 'Sélectionne un bot valide.' });
+  if (!/^[1-9]\d{7,14}$/.test(destinataire)) return res.status(400).json({ erreur: 'Numéro destinataire invalide : indicatif pays + numéro, chiffres uniquement.' });
+  if (!message || message.length > 4000) return res.status(400).json({ erreur: 'Le message doit contenir entre 1 et 4 000 caractères.' });
+
+  const s = sessions.get(bot);
+  if (!s || !s.proc || !s.proc.connected) return res.status(409).json({ erreur: 'Ce bot n’est pas actif. Reprends-le ou attends sa connexion.' });
+  if (s.statut !== 'connecte' && s.statut !== 'pause') return res.status(409).json({ erreur: 'Ce bot n’est pas encore connecté à WhatsApp.' });
+
+  const requestId = crypto.randomBytes(12).toString('hex');
+  try {
+    const resultat = await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        envoisAdminEnAttente.delete(requestId);
+        reject(new Error('Le bot n’a pas répondu à temps. Vérifie sa connexion WhatsApp.'));
+      }, 25000);
+      envoisAdminEnAttente.set(requestId, data => {
+        clearTimeout(timer);
+        resolve(data);
+      });
+      try {
+        s.proc.send({ type: 'ADMIN_SEND_TEXT', requestId, destinataire, message }, err => {
+          if (err) {
+            clearTimeout(timer);
+            envoisAdminEnAttente.delete(requestId);
+            reject(err);
+          }
+        });
+      } catch (e) {
+        clearTimeout(timer);
+        envoisAdminEnAttente.delete(requestId);
+        reject(e);
+      }
+    });
+    if (!resultat.ok) return res.status(502).json({ erreur: resultat.erreur || 'WhatsApp n’a pas pu envoyer le message.' });
+    res.json({ ok: true, bot, destinataire });
+  } catch (e) {
+    res.status(504).json({ erreur: e.message || 'Échec de l’envoi.' });
+  }
+});
+
 // Pause douce : garde le socket WhatsApp connecté, mais ignore les nouveaux messages.
 app.post('/api/admin/pause', admin, (req, res) => {
   const s = sessions.get(String((req.body && req.body.numero) || ''));

@@ -49,10 +49,25 @@ const PORT = process.env.PORT || 3000;
 
 // Pause administrative : le socket WhatsApp reste connecté, mais le bot ignore les messages.
 let botEnPause = process.env.BOT_START_PAUSED === '1';
-process.on('message', (commande) => {
+process.on('message', async (commande) => {
   if (!commande || typeof commande !== 'object') return;
-  if (commande.type === 'BOT_PAUSE') botEnPause = true;
-  if (commande.type === 'BOT_RESUME') botEnPause = false;
+  if (commande.type === 'BOT_PAUSE') { botEnPause = true; return; }
+  if (commande.type === 'BOT_RESUME') { botEnPause = false; return; }
+
+  // ✉️ Envoi manuel demandé par le panneau admin (ne dépend pas du mode pause du bot).
+  if (commande.type === 'ADMIN_SEND_TEXT' && commande.requestId) {
+    try {
+      const destinataire = String(commande.destinataire || '').replace(/\D/g, '');
+      const message = String(commande.message || '').trim();
+      if (!sock || !sock.user) throw new Error('Le compte WhatsApp du bot n’est pas connecté.');
+      if (!/^[1-9]\d{7,14}$/.test(destinataire)) throw new Error('Numéro destinataire invalide.');
+      if (!message || message.length > 4000) throw new Error('Message vide ou trop long.');
+      await sock.sendMessage(destinataire + '@s.whatsapp.net', { text: message });
+      if (process.send) process.send({ type: 'ADMIN_SEND_RESULT', requestId: commande.requestId, ok: true });
+    } catch (e) {
+      if (process.send) process.send({ type: 'ADMIN_SEND_RESULT', requestId: commande.requestId, ok: false, erreur: e.message || 'Erreur WhatsApp.' });
+    }
+  }
 });
 
 // Anti-doublons & Cache Anti-Delete & Mutes
