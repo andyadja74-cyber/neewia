@@ -1084,6 +1084,24 @@ async function commandeVocF(sock, msg, remoteJid, cleanText) {
   }
 }
 
+// 🎬 ═══════════════════════════════════════════════════════════
+// ANIMÉS (Jikan API / MyAnimeList)
+// ═══════════════════════════════════════════════════════════
+async function recupererAnime(titre) {
+  const res = await axios.get(`https://api.jikan.moe/v4/anime?q=${encodeURIComponent(titre)}&limit=1`, { timeout: 15000 });
+  const dataAnime = res.data && res.data.data && res.data.data[0];
+  if (!dataAnime) return null;
+  return {
+    titre: dataAnime.title_japanese || dataAnime.title,
+    titreFr: dataAnime.title,
+    episodes: dataAnime.episodes || 'Inconnu',
+    statut: dataAnime.status || 'Inconnu',
+    score: dataAnime.score || 'N/A',
+    synopsis: dataAnime.synopsis ? dataAnime.synopsis.replace('[Written by MAL Rewrite]', '').trim() : 'Aucun synopsis disponible.',
+    image: dataAnime.images?.jpg?.large_image_url || dataAnime.images?.jpg?.image_url
+  };
+}
+
 // 🧹 ═══════════════════════════════════════════════════════════
 // AUTO-SUPPRESSION : la commande tapée par le propriétaire est effacée dès qu'elle est lancée
 // ═══════════════════════════════════════════════════════════
@@ -1269,6 +1287,7 @@ const CATEGORIES_MENU = [
       { groupe: '📸 Médias', noms: ['.voc'], args: '[texte]', desc: "Je dis ton texte en vocal (voix d'homme grave)" },
       { groupe: '📸 Médias', noms: ['.voc-f'], args: '[texte]', desc: "Je dis ton texte en vocal (voix de femme)" },
       { groupe: '🌐 Utilitaires', noms: ['.ia', '.gemini'], aff: '.ia', args: '[question]', desc: 'Discuter avec Gemini (comprend aussi les photos)' },
+      { groupe: '🌐 Utilitaires', noms: ['.anime'], args: '[titre]', desc: 'Rechercher des informations sur un animé' },
       { groupe: '🌐 Utilitaires', noms: ['.translate', '.trad', '.traduire'], args: '[langue] [texte]', desc: 'Traduire un texte' },
       { groupe: '🌐 Utilitaires', noms: ['.dico', '.def', '.dictionnaire'], aff: '.dico', args: '[mot]', desc: 'Dictionnaire en ligne' },
       { groupe: '🌐 Utilitaires', noms: ['ret'], args: '[phrase] (nombre)', desc: 'Répéter une phrase', test: t => t.startsWith('ret ') },
@@ -3014,7 +3033,7 @@ async function startBot() {
         if (lowerText.startsWith('.kick') && isGroup) {
           try {
             await sock.groupParticipantsUpdate(remoteJid, [mentionMod], "remove");
-            await envoyerAvecDelai(sock, remoteJid, { text: `👢 Expulsé.`, mentions: [mentionMod] }, { quoted: msg }, 'texte');
+            await envoyerAvecDelai(sock, remoteJid, { text: `BOOT Expulsé.`, mentions: [mentionMod] }, { quoted: msg }, 'texte');
           } catch (e) {}
           return;
         }
@@ -3053,6 +3072,37 @@ async function startBot() {
 
       if (/^\.(ia|gemini)(\s|$)/.test(lowerText)) {
         await commandeIA(sock, msg, remoteJid, cleanText, senderJid, isGroup);
+        return;
+      }
+
+      if (lowerText.startsWith('.anime')) {
+        const titreAnime = cleanText.replace(/^\.anime\s*/i, '').trim();
+        if (!titreAnime) {
+          await envoyerAvecDelai(sock, remoteJid, { text: "⚠️ Précise le nom de l'animé !\nExemple : `.anime Naruto`" }, { quoted: msg }, 'texte');
+          return;
+        }
+
+        try {
+          const resAnime = await recupererAnime(titreAnime);
+          if (!resAnime) {
+            await envoyerAvecDelai(sock, remoteJid, { text: "❌ Animé introuvable." }, { quoted: msg }, 'texte');
+            return;
+          }
+
+          const txtAnime = `🎬 *${resAnime.titreFr}* (${resAnime.titre})\n\n` +
+            `📺 *Épisodes :* ${resAnime.episodes}\n` +
+            `📌 *Statut :* ${resAnime.statut}\n` +
+            `⭐ *Note :* ${resAnime.score}/10\n\n` +
+            `📝 *Synopsis :*\n${resAnime.synopsis}`;
+
+          if (resAnime.image) {
+            await envoyerAvecDelai(sock, remoteJid, { image: { url: resAnime.image }, caption: txtAnime }, { quoted: msg }, 'media');
+          } else {
+            await envoyerAvecDelai(sock, remoteJid, { text: txtAnime }, { quoted: msg }, 'texte');
+          }
+        } catch (e) {
+          await envoyerAvecDelai(sock, remoteJid, { text: "⚠️ Erreur lors de la récupération des données de l'animé." }, { quoted: msg }, 'texte');
+        }
         return;
       }
 
