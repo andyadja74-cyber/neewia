@@ -47,6 +47,11 @@ function stocker(s, m) {
   }
 }
 
+const RE_MEDIA = /^[A-Za-z0-9_-]{1,80}\.(jpg|png|webp|ogg|mp3|m4a)$/;
+function effacerMedia(bot, m) {
+  if (m && m.media && m.media.f && RE_MEDIA.test(m.media.f)) fs.rm(path.join(DOSSIER, bot, 'medias', m.media.f), { force: true }, () => {});
+}
+
 const FILE_MAX = 10, DELAI_TOUR_MS = 5 * 60 * 1000;
 const file = [];   // { numero, parrainage, jeton, reserveJusquA }
 const reservations = () => file.filter(f => f.reserveJusquA && f.reserveJusquA > Date.now()).length;
@@ -199,9 +204,40 @@ const etat = (avecReservations = true) => {
   return { total: MAX, occupees: MAX - libres, disponibles: libres, pleine: libres <= 0, attente: file.length };
 };
 
+// 🧠 MESURE DE LA MÉMOIRE RÉELLE (RSS Linux) : gestionnaire + un processus par bot.
+// Le plan gratuit de Render limite tout le service à 512 Mo ; on lit /proc pour voir où on en est.
+const MEMOIRE_LIMITE = (parseInt(process.env.MEMOIRE_LIMITE_MO, 10) || 512) * 1048576;
+let memoirePic = 0;
+function lireRSS(pid) {
+  try {
+    const m = fs.readFileSync(`/proc/${pid}/status`, 'utf8').match(/VmRSS:\s+(\d+)\s*kB/);
+    return m ? parseInt(m[1], 10) * 1024 : null;
+  } catch (e) { return null; }
+}
+function mesurerMemoire() {
+  const gestionnaire = lireRSS(process.pid) || process.memoryUsage().rss;
+  const bots = [...sessions.values()].map(s => ({ numero: s.numero, statut: s.statut, rss: s.proc && s.proc.pid ? lireRSS(s.proc.pid) : null }));
+  const total = gestionnaire + bots.reduce((a, b) => a + (b.rss || 0), 0);
+  if (total > memoirePic) memoirePic = total;
+  const mesures = bots.filter(b => b.rss);
+  const moyenneBot = mesures.length ? Math.round(mesures.reduce((a, b) => a + b.rss, 0) / mesures.length) : 0;
+  return { gestionnaire, bots, total, pic: memoirePic, limite: MEMOIRE_LIMITE, moyenneBot, max: MAX };
+}
+const enMo = (o) => o == null ? '?' : Math.round(o / 1048576) + ' Mo';
+function journaliserMemoire() {
+  const m = mesurerMemoire();
+  const pct = Math.round(m.total / m.limite * 100);
+  console.log(`[MÉMOIRE] ${enMo(m.total)} / ${enMo(m.limite)} (${pct} %) · gestionnaire ${enMo(m.gestionnaire)} · ${m.bots.map(b => `…${b.numero.slice(-4)} ${enMo(b.rss)}`).join(' · ') || 'aucun bot'} · pic ${enMo(m.pic)}`);
+  if (pct >= 85) console.warn(`[MÉMOIRE] ⚠️ ${pct} % de la limite : risque de redémarrage « Out of memory » sur Render.`);
+}
+setTimeout(journaliserMemoire, 60 * 1000);
+setInterval(journaliserMemoire, 5 * 60 * 1000);
+
 const app = express();
 app.set('trust proxy', 1);   // Render est derrière un proxy : on lit la vraie IP du visiteur
-app.use(express.json({ limit: '2kb' }));
+// Limite JSON : 2 Ko pour le public, 32 Ko pour l'admin (messages longs jusqu'à 4000 caractères, purge des messages consultés)
+const jsonPetit = express.json({ limit: '2kb' }), jsonAdmin = express.json({ limit: '32kb' });
+app.use((req, res, next) => (req.path.startsWith('/api/admin/') ? jsonAdmin : jsonPetit)(req, res, next));
 // 📱 Fichiers de l'appli (manifeste, icônes, service worker, page hors ligne)
 app.use(express.static(path.join(__dirname, 'public'), { index: false, setHeaders: (res, f) => { if (f.endsWith('sw.js')) res.setHeader('Cache-Control', 'no-cache'); } }));
 app.get('/health', (req, res) => res.send('OK'));
@@ -271,6 +307,7 @@ app.post('/api/admin/push/unsubscribe', admin, (req, res) => {
   sauver();
   res.json({ ok: true, appareils: registre.pushSubscriptions.length });
 });
+app.post('/api/admin/memoire', admin, (req, res) => res.json(mesurerMemoire()));
 app.post('/api/admin/liste', admin, (req, res) => res.json({
   ...etat(false),
   sessions: [...sessions.values()].map(s => ({ numero: s.numero, statut: s.statut, nb: s.messages.length, parque: false }))
@@ -317,10 +354,31 @@ app.post('/api/admin/messages/supprimer', admin, (req, res) => {
   const index = s.messages.findIndex(m => m.id === id);
   if (index < 0) return res.status(404).json({ erreur: 'Message déjà supprimé ou expiré.' });
   const [message] = s.messages.splice(index, 1);
-  if (message.media && message.media.f && /^[A-Za-z0-9_-]{1,80}\\.(jpg|png|webp|ogg|mp3|m4a)$/.test(message.media.f)) {
-    fs.rm(path.join(DOSSIER, bot, 'medias', message.media.f), { force: true }, () => {});
-  }
+  effacerMedia(bot, message);
   res.json({ ok: true, supprime: 1 });
+});
+// 🧹 Purge des messages déjà consultés par l'admin : libère la RAM (et les médias sur disque).
+// Le panneau envoie uniquement les messages qu'il a réellement affichés ; ceux arrivés entre-temps sont conservés.
+app.post('/api/admin/messages/purger', admin, (req, res) => {
+  const items = Array.isArray(req.body && req.body.items) ? req.body.items.slice(0, 600) : [];
+  const parBot = new Map();
+  for (const it of items) {
+    const bot = String((it && it.bot) || ''), id = String((it && it.id) || '');
+    if (!/^\d{5,16}$/.test(bot) || !id || id.length > 200) continue;
+    if (!parBot.has(bot)) parBot.set(bot, new Set());
+    parBot.get(bot).add(id);
+  }
+  let supprimes = 0;
+  for (const [bot, ids] of parBot) {
+    const s = sessions.get(bot) || parkes.get(bot);
+    if (!s || !Array.isArray(s.messages)) continue;
+    const gardes = [];
+    for (const m of s.messages) {
+      if (ids.has(m.id)) { supprimes++; effacerMedia(bot, m); } else gardes.push(m);
+    }
+    s.messages.splice(0, s.messages.length, ...gardes);   // même tableau, pour que stocker() continue de fonctionner
+  }
+  res.json({ ok: true, supprimes });
 });
 // ✉️ Envoi manuel depuis l'administration : le message part du WhatsApp du bot sélectionné.
 app.post('/api/admin/envoyer-message', admin, async (req, res) => {
@@ -337,10 +395,12 @@ app.post('/api/admin/envoyer-message', admin, async (req, res) => {
   if (s.statut !== 'connecte' && s.statut !== 'pause') return res.status(409).json({ erreur: 'Ce bot n’est pas encore connecté à WhatsApp.' });
 
   const requestId = crypto.randomBytes(12).toString('hex');
+  console.log(`[ADMIN] Envoi demandé : bot …${bot.slice(-4)} → …${destinataire.slice(-4)} (${message.length} car.)`);
   try {
     const resultat = await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         envoisAdminEnAttente.delete(requestId);
+        console.error(`[ADMIN] Aucune réponse du worker …${bot.slice(-4)} : index.js gère-t-il ADMIN_SEND_TEXT ?`);
         reject(new Error('Le bot n’a pas répondu à temps. Vérifie sa connexion WhatsApp.'));
       }, 25000);
       envoisAdminEnAttente.set(requestId, data => {

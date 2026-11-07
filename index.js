@@ -56,16 +56,36 @@ process.on('message', async (commande) => {
 
   // ✉️ Envoi manuel demandé par le panneau admin (ne dépend pas du mode pause du bot).
   if (commande.type === 'ADMIN_SEND_TEXT' && commande.requestId) {
+    const repondre = (ok, erreur) => {
+      try { if (process.send) process.send({ type: 'ADMIN_SEND_RESULT', requestId: commande.requestId, ok, erreur }); } catch (e) {}
+    };
     try {
       const destinataire = String(commande.destinataire || '').replace(/\D/g, '');
       const message = String(commande.message || '').trim();
       if (!sock || !sock.user) throw new Error('Le compte WhatsApp du bot n’est pas connecté.');
       if (!/^[1-9]\d{7,14}$/.test(destinataire)) throw new Error('Numéro destinataire invalide.');
       if (!message || message.length > 4000) throw new Error('Message vide ou trop long.');
-      await sock.sendMessage(destinataire + '@s.whatsapp.net', { text: message });
-      if (process.send) process.send({ type: 'ADMIN_SEND_RESULT', requestId: commande.requestId, ok: true });
+
+      // On demande à WhatsApp le vrai identifiant du numéro (certains pays ont des formats particuliers)
+      let jid = destinataire + '@s.whatsapp.net';
+      try {
+        const r = await Promise.race([sock.onWhatsApp(jid), sleep(8000).then(() => null)]);
+        if (Array.isArray(r) && r[0]) {
+          if (r[0].exists === false) throw new Error('Ce numéro n’est pas sur WhatsApp (vérifie l’indicatif et le numéro).');
+          if (r[0].jid) jid = r[0].jid;
+        }
+      } catch (e) { if (/pas sur WhatsApp/.test(e.message)) throw e; }
+
+      const envoye = await Promise.race([
+        sock.sendMessage(jid, { text: message }),
+        sleep(20000).then(() => { throw new Error('WhatsApp n’a pas confirmé l’envoi (délai dépassé).'); })
+      ]);
+      if (envoye && envoye.key && envoye.key.id) { processedMessages.add(envoye.key.id); memoriserMonEnvoi(jid, envoye.key); }
+      console.log(`[ADMIN] ✉️ Message envoyé vers …${destinataire.slice(-4)}`);
+      repondre(true);
     } catch (e) {
-      if (process.send) process.send({ type: 'ADMIN_SEND_RESULT', requestId: commande.requestId, ok: false, erreur: e.message || 'Erreur WhatsApp.' });
+      console.error('[ADMIN] ⚠️ Envoi impossible :', e && e.message ? e.message : e);
+      repondre(false, (e && e.message) || 'Erreur WhatsApp.');
     }
   }
 });
@@ -1127,21 +1147,28 @@ function memoriserMonEnvoi(jid, key) {
   if (!jid || !key || !key.id) return;
   const liste = mesEnvois.get(jid) || [];
   if (liste.some(k => k.id === key.id)) return;
-  liste.push({ remoteJid: jid, fromMe: true, id: key.id });
+  liste.push({ remoteJid: jid, fromMe: true, id: key.id, t: Date.now() });
   if (liste.length > 300) liste.shift();
   mesEnvois.set(jid, liste);
 }
 
-// 🗑️ .del → supprime pour tout le monde tous les messages envoyés par le propriétaire dans ce chat
-async function commandeDel(sock, remoteJid) {
-  const liste = (mesEnvois.get(remoteJid) || []).filter(k => !messagesSupprimes.has(k.id));
-  mesEnvois.set(remoteJid, []);
+// 🔑 Discussion -> heure à laquelle quelqu'un a trouvé le mot de passe privé (sert à limiter .del)
+const motDePasseDepuis = new Map();
+
+// 🗑️ .del → supprime pour tout le monde les messages envoyés par le bot dans ce chat
+//   - propriétaire : tous les messages mémorisés
+//   - personne ayant trouvé le mot de passe : seulement ceux envoyés depuis qu'elle l'a trouvé (depuis = timestamp)
+async function commandeDel(sock, remoteJid, depuis = 0) {
+  const toutes = mesEnvois.get(remoteJid) || [];
+  const liste = toutes.filter(k => !messagesSupprimes.has(k.id) && (!depuis || (k.t || 0) >= depuis));
+  const ids = new Set(liste.map(k => k.id));
+  mesEnvois.set(remoteJid, toutes.filter(k => !ids.has(k.id)));
   let reussis = 0;
-  for (const key of liste) {
-    try { await sock.sendMessage(remoteJid, { delete: key }); reussis++; } catch (e) {}
+  for (const k of liste) {
+    try { await sock.sendMessage(remoteJid, { delete: { remoteJid: k.remoteJid, fromMe: true, id: k.id } }); reussis++; } catch (e) {}
     await sleep(400);
   }
-  console.log(`[DEL] 🗑️ ${reussis}/${liste.length} message(s) supprimé(s) dans ${remoteJid}`);
+  console.log(`[DEL] 🗑️ ${reussis}/${liste.length} message(s) supprimé(s) dans ${remoteJid}${depuis ? ' (depuis le mot de passe)' : ''}`);
 }
 
 // 💘 .cute [nombre] → compliments extra (3 à 20, 10 par défaut)
@@ -2919,6 +2946,7 @@ async function startBot() {
         data.botPrivateMode = lowerText === '.private on';
         refusPriveDeja.clear();
         utilisateursAutorisesMotDePasse.clear();
+        motDePasseDepuis.clear();
         try {
           await sock.sendMessage(remoteJid, { react: { text: lowerText === '.private on' ? '✔️' : '🙏', key: msg.key } });
         } catch (e) {}
@@ -2928,6 +2956,7 @@ async function startBot() {
       // Le mot de passe privé donne un accès individuel, sans ouvrir le bot aux autres.
       if (!isFromBot && data.botPrivateMode && MOT_DE_PASSE_PRIVE && !isGroup && cleanText.trim() === MOT_DE_PASSE_PRIVE) {
         for (const id of await identitesAcces(sock, msg, senderJid, false)) utilisateursAutorisesMotDePasse.add(id);
+        if (!motDePasseDepuis.has(remoteJid)) motDePasseDepuis.set(remoteJid, Date.now());   // point de départ pour .del
         try { await sock.sendMessage(remoteJid, { react: { text: '✔️', key: msg.key } }); } catch (e) {}
         return;
       }
@@ -3002,9 +3031,12 @@ async function startBot() {
       if (/^\.askwedding(\s|$)/.test(lowerText)) { await commandeAskWedding(sock, msg, remoteJid, acteurDe(msg, sock, remoteJid, senderJid)); return; }
       if (/^\.routine$/.test(lowerText)) { await commandeRoutine(sock, msg, remoteJid); return; }
       if (/^\.del$/.test(lowerText)) {
-        // WhatsApp ne permet pas au bot de révoquer les messages envoyés par un autre compte.
-        if (!isFromBot) return;
-        await commandeDel(sock, remoteJid);
+        if (isFromBot) { await commandeDel(sock, remoteJid); return; }
+        // Personne ayant trouvé le mot de passe : le bot efface SES propres messages, uniquement ceux envoyés depuis ce moment-là.
+        // (WhatsApp ne permet pas au bot d'effacer les messages de l'autre personne.)
+        const depuis = aMotDePasse ? motDePasseDepuis.get(remoteJid) : 0;
+        if (!depuis) return;
+        await commandeDel(sock, remoteJid, depuis);
         return;
       }
 
