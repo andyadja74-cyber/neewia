@@ -282,6 +282,7 @@ function admin(req, res, next) {
   if (!ok) { l.push(t); echecsAdmin.set(req.ip, l); return res.status(401).json({ erreur: 'Mot de passe incorrect.' }); }
   next();
 }
+app.get('/chat', (req, res) => res.sendFile(path.join(__dirname, 'public', 'chat.html')));
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
 // 🔔 Abonnement Web Push : routes réservées aux administrateurs authentifiés.
