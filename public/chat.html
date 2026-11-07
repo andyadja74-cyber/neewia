@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="dark">
+<link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#02050b">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="icon" href="/icon-192.png">
+<title>Chat · LEYBOTDY</title>
+<style>
+*{box-sizing:border-box;margin:0}
+html,body{height:100%}
+body{display:flex;flex-direction:column;background:#02050b;color:#eaf6ff;font:16px/1.5 -apple-system,"SF Pro Display","Segoe UI",system-ui,sans-serif;overflow:hidden;padding-top:env(safe-area-inset-top)}
+iframe{flex:1;min-height:0;width:100%;border:0;background:#02050b}
+.tabbar{flex:none;display:flex;gap:6px;padding:7px;margin:8px auto max(12px,env(safe-area-inset-bottom));border-radius:28px;border:1px solid #ffffff4d;background:linear-gradient(160deg,#ffffff2a,#ffffff0d);box-shadow:inset 1.5px 1.5px 0 #ffffff80,inset -1px -1px 0 #ffffff1f,0 16px 44px #000a}
+.tabbar a{display:flex;flex-direction:column;align-items:center;gap:2px;min-width:78px;padding:8px 14px;border-radius:21px;font:600 11px/1.2 -apple-system,system-ui,sans-serif;color:#d3dcee;text-decoration:none;transition:.25s;cursor:pointer}
+.tabbar a em{font-style:normal;font-size:20px}.tabbar a:active{transform:scale(.94)}
+.tabbar a.on{color:#fff;background:linear-gradient(160deg,#ffffff4d,#ffffff14);box-shadow:inset 1px 1px 0 #ffffffaa,0 0 18px #ffffff22}
+</style></head><body>
+<iframe src="/chat-app.html" title="Chat" allow="microphone; camera; clipboard-write; notifications; autoplay; fullscreen"></iframe>
+<nav class="tabbar"><a href="/"><em>🏠</em>Accueil</a><a href="/#aide"><em>❓</em>Aide</a><a href="/chat" class="on"><em>💬</em>Chat</a><a href="/admin"><em>🔐</em>Admin</a></nav>
+</body></html>

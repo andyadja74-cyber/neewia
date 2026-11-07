@@ -1,0 +1,1395 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Titan Chat - Dark Mode Ultra</title>
+  <link rel="stylesheet" href="/chat.css" id="themeStylesheet">
+  
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+    import { getAnalytics } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-analytics.js";
+    import { getFirestore, collection, addDoc, doc, setDoc, deleteDoc, updateDoc, getDoc, getDocs, onSnapshot, query, where, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyDH8C2sFvKQ8uW_XLdcb4ty-ZErKKPfpKA",
+      authDomain: "chatlink-1e19e.firebaseapp.com",
+      projectId: "chatlink-1e19e",
+      storageBucket: "chatlink-1e19e.firebasestorage.app",
+      messagingSenderId: "723771396751",
+      appId: "1:723771396751:web:d8252ca837b47c24d596fa",
+      measurementId: "G-FHVDS5VMDD"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const analytics = getAnalytics(app);
+    const db = getFirestore(app);
+
+    window.db = db;
+    window.collection = collection;
+    window.addDoc = addDoc;
+    window.doc = doc;
+    window.setDoc = setDoc;
+    window.deleteDoc = deleteDoc;
+    window.updateDoc = updateDoc;
+    window.getDoc = getDoc;
+    window.getDocs = getDocs;
+    window.onSnapshot = onSnapshot;
+    window.query = query;
+    window.where = where;
+    window.orderBy = orderBy;
+    window.serverTimestamp = serverTimestamp;
+  </script>
+  <style>
+    .emoji-picker-container, .sticker-picker-container {
+      position: absolute;
+      bottom: 65px;
+      left: 10px;
+      background: var(--header-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 8px;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 5px;
+      z-index: 100;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.3);
+      backdrop-filter: blur(10px);
+    }
+    .sticker-picker-container { grid-template-columns: repeat(3, 1fr); max-height: 200px; overflow-y: auto; }
+    .emoji-btn, .sticker-btn { background: none; border: none; font-size: 1.2rem; cursor: pointer; padding: 5px; border-radius: 8px; text-align: center; }
+    .sticker-btn { font-size: 1.8rem; padding: 8px; transition: transform 0.1s; }
+    .emoji-btn:hover, .sticker-btn:hover { background: var(--border); transform: scale(1.1); }
+    .reaction-container { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+    .reaction-tag { font-size: 0.75rem; background: rgba(255,255,255,0.1); padding: 2px 6px; border-radius: 10px; display: inline-flex; align-items: center; gap: 3px; cursor: pointer; border: 1px solid transparent; transition: background 0.2s; }
+    .reaction-tag:hover { background: rgba(255,255,255,0.2); }
+    .reaction-tag.active { border-color: var(--accent); background: rgba(var(--accent-rgb, 0,223,162), 0.15); }
+    .sticker-msg { font-size: 2.5rem; padding: 4px; line-height: 1; }
+    .audio-msg { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
+  </style>
+</head>
+<body class="glass" onload="verifierCookieID()">
+<div class="fond" aria-hidden="true"><i></i><i></i></div><div class="motif" aria-hidden="true"></div>
+
+<div class="app-container">
+
+  <!-- ÉCRAN 1 : INSCRIPTION -->
+  <div id="screen-register" class="screen">
+    <h2>🫣🤫Leybotdy🙌😌😏</h2>
+    <p class="subtitle">Choisis ton identifiant unique (2 à 6 lettres)</p>
+    <input type="text" id="registerIdInput" placeholder="Ton ID (ex: Andrew)" maxlength="6">
+    <button onclick="enregistrerID()">S'enregistrer</button>
+    <p id="registerError" class="error-msg"></p>
+  </div>
+
+  <!-- ÉCRAN 2 : MENU PRINCIPAL -->
+  <div id="screen-menu" class="screen hidden">
+    <h2>Bienvenue, <span id="displayName" style="color: var(--accent);"></span></h2>
+    <p class="subtitle">Sélectionne un mode de discussion</p>
+    
+    <div style="background: var(--header-bg); border: 1px solid var(--border); border-radius: 14px; padding: 10px; max-height: 120px; overflow-y: auto; margin-bottom: 5px;">
+      <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: 6px;">🏛️ Salons récemment visités :</p>
+      <div id="recentSalonsBox" style="display: flex; flex-direction: column; gap: 6px;">
+        <span style="font-size: 0.8rem; color: var(--text-muted); text-align: center;">Aucun salon en mémoire</span>
+      </div>
+    </div>
+
+    <div class="menu-options">
+      <button onclick="ouvrirMenuPV()">💬 Discussions Privées (PV)</button>
+      <button onclick="afficherSectionSalons()" class="btn-secondary">🏛️ Salons de Groupe</button>
+      <button onclick="ouvrirSecretLeybotdy()" class="btn-secondary" style="border-color: var(--accent); color: var(--accent);">🔐 Secret de Leybotdy</button>
+      <button onclick="ouvrirParametres()" class="btn-secondary">⚙️ Paramètres & Apparence</button>
+    </div>
+  </div>
+
+  <!-- ÉCRAN PARAMÈTRES -->
+  <div id="screen-settings" class="screen hidden" style="padding: 20px; justify-content: flex-start; gap: 15px;">
+    <div class="dashboard-header" style="margin: -20px -20px 10px -20px;">
+      <button onclick="retourMenu()" style="width: auto; padding: 6px 12px; font-size: 0.8rem;" class="btn-secondary">← Menu</button>
+      <span>Paramètres</span>
+      <span></span>
+    </div>
+    <h3>Personnalisation du Thème</h3>
+    <p class="subtitle" style="text-align: left;">Choisis ton ambiance (sauvegardée automatiquement) :</p>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
+      <button onclick="changerThemeVerre()" title="Thème Verre (style du bot)" style="background: linear-gradient(150deg, rgba(255,255,255,0.28), rgba(159,227,255,0.12)); backdrop-filter: blur(8px); color: #fff; width: 50px; height: 50px; border-radius: 14px; padding:0; border: 2px solid rgba(207,239,255,0.7); font-size: 1.2rem; display: flex; align-items: center; justify-content: center;">🧊</button>
+      <button onclick="changerThemeGlacial()" title="Thème Glacial Polaire" style="background: rgba(135, 206, 250, 0.3); backdrop-filter: blur(8px); color: #fff; width: 50px; height: 50px; border-radius: 14px; padding:0; border: 2px solid rgba(255,255,255,0.6); font-size: 1.2rem; display: flex; align-items: center; justify-content: center;">❄️</button>
+      <button onclick="changerTheme('--accent: #00dfa2; --accent-hover: #00ffb7; --bg-color: #0d1b1e; --card-bg: #13272c; --header-bg: #1b353b; --bubble-me: #1e4d3b; --bubble-other: #18333a; --border: rgba(255, 255, 255, 0.08);')" style="background: #00dfa2; width: 45px; height: 45px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2);"></button>
+      <button onclick="changerTheme('--accent: #3b82f6; --accent-hover: #60a5fa; --bg-color: #0f172a; --card-bg: #1e293b; --header-bg: #334155; --bubble-me: #1d4ed8; --bubble-other: #334155; --border: rgba(255, 255, 255, 0.08);')" style="background: #3b82f6; width: 45px; height: 45px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2);"></button>
+      <button onclick="changerTheme('--accent: #ec4899; --accent-hover: #f472b6; --bg-color: #190e17; --card-bg: #261524; --header-bg: #382035; --bubble-me: #831843; --bubble-other: #382035; --border: rgba(255, 255, 255, 0.08);')" style="background: #ec4899; width: 45px; height: 45px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2);"></button>
+      <button onclick="changerTheme('--accent: #eab308; --accent-hover: #facc15; --bg-color: #1c1917; --card-bg: #292524; --header-bg: #44403c; --bubble-me: #78350f; --bubble-other: #44403c; --border: rgba(255, 255, 255, 0.08);')" style="background: #eab308; width: 45px; height: 45px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2);"></button>
+      <button onclick="changerTheme('--accent: #a855f7; --accent-hover: #c084fc; --bg-color: #171022; --card-bg: #231734; --header-bg: #35234c; --bubble-me: #581c87; --bubble-other: #35234c; --border: rgba(255, 255, 255, 0.08);')" style="background: #a855f7; width: 45px; height: 45px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2);"></button>
+    </div>
+    
+    <h3 style="margin-top: 15px;">Effets Sonores (Web Audio API)</h3>
+    <button onclick="basculerParametreSon()" id="soundToggleBtn" class="btn-secondary">🔊 Effets sonores : Activés</button>
+
+    <h3 style="margin-top: 15px;">Notifications</h3>
+    <button onclick="demanderPermissionNotification()" class="btn-secondary">Activer les notifications hors app 🔔</button>
+
+    <h3 style="margin-top: 15px;">Compte & Cookies</h3>
+    <button onclick="supprimerCookieID()" class="btn-secondary" style="color: var(--danger); border-color: var(--danger);">Oublier mon ID (Déconnexion)</button>
+  </div>
+
+  <!-- SOUS-ÉCRAN : LISTE / GESTION DES PV RÉCENTS -->
+  <div id="screen-pv-list" class="screen hidden" style="padding: 0;">
+    <div class="dashboard-header">
+      <button onclick="retourMenu()" style="width: auto; padding: 6px 12px; font-size: 0.8rem;" class="btn-secondary">← Menu</button>
+      <span>Discussions Récentes</span>
+      <span></span>
+    </div>
+    <div style="padding: 15px; display: flex; gap: 10px; background: var(--header-bg); border-bottom: 1px solid var(--border);">
+      <input type="text" id="searchFriendInput" placeholder="Nouvel ID d'ami...">
+      <button onclick="lancerNouveauPV()" style="width: auto;">Discuter</button>
+    </div>
+    <div class="chat-area" id="recentChatsBox" style="gap: 10px;">
+      <p style="text-align: center; color: var(--text-muted); margin-top: 20px;">Aucune discussion récente. Cherche un ami ci-dessus !</p>
+    </div>
+  </div>
+
+  <!-- ÉCRAN 3 : CHAT PRIVÉ (PV) ACTIF -->
+  <div id="screen-pv" class="screen hidden" style="padding: 0; position: relative;">
+    <div class="dashboard-header">
+      <button onclick="ouvrirMenuPV()" style="width: auto; padding: 6px 12px; font-size: 0.8rem;" class="btn-secondary">← Retour</button>
+      <div>
+        <span id="pvTargetName" style="font-weight: bold; display: block; text-align: right;">Discussion Privée</span>
+        <span id="pvUserStatus" style="font-size: 0.7rem; color: var(--text-muted); display: block; text-align: right;">Vérification...</span>
+      </div>
+    </div>
+
+    <div class="chat-area" id="pvChatBox"></div>
+    <div id="pvTypingStatus" class="typing-indicator"></div>
+
+    <div id="pvReplyContainer" class="reply-banner hidden">
+      <div><small style="color: var(--accent);">Réponse à :</small> <span id="pvReplyTextPreview" style="font-size: 0.8rem;"></span></div>
+      <button onclick="annulerReponse('pv')" style="background:none; border:none; color:var(--danger); width:auto; padding:0; font-size:1rem;">✕</button>
+    </div>
+
+    <div id="pvEmojiPicker" class="emoji-picker-container hidden">
+      <button class="emoji-btn" onclick="insererEmoji('pv', '😊')">😊</button>
+      <button class="emoji-btn" onclick="insererEmoji('pv', '😂')">😂</button>
+      <button class="emoji-btn" onclick="insererEmoji('pv', '❤️')">❤️</button>
+      <button class="emoji-btn" onclick="insererEmoji('pv', '👍')">👍</button>
+      <button class="emoji-btn" onclick="insererEmoji('pv', '😏')">😏</button>
+      <button class="emoji-btn" onclick="insererEmoji('pv', '👌')">👌</button>
+      <button class="emoji-btn" onclick="insererEmoji('pv', '🥺')">🥺</button>
+      <button class="emoji-btn" onclick="insererEmoji('pv', '😍')">😍</button>
+      <button class="emoji-btn" onclick="insererEmoji('pv', '😑')">😑</button>
+      <button class="emoji-btn" onclick="insererEmoji('pv', '😌')">😌</button>
+    </div>
+
+    <div id="pvStickerPicker" class="sticker-picker-container hidden">
+      <button class="sticker-btn" onclick="envoyerSticker('pv', '🔥')">🔥</button>
+      <button class="sticker-btn" onclick="envoyerSticker('pv', '💀')">💀</button>
+      <button class="sticker-btn" onclick="envoyerSticker('pv', '🎉')">🎉</button>
+      <button class="sticker-btn" onclick="envoyerSticker('pv', '🤡')">🤡</button>
+      <button class="sticker-btn" onclick="envoyerSticker('pv', '🚀')">🚀</button>
+      <button class="sticker-btn" onclick="envoyerSticker('pv', '👑')">👑</button>
+      <button class="sticker-btn" onclick="envoyerSticker('pv', '🧊')">🧊</button>
+      <button class="sticker-btn" onclick="envoyerSticker('pv', '👻')">👻</button>
+      <button class="sticker-btn" onclick="envoyerSticker('pv', '⭐')">⭐</button>
+    </div>
+
+    <div class="input-chat-row">
+      <input type="file" id="pvImageInput" accept="image/*" style="display:none" onchange="gererSelectionImage('pv', event)">
+      <button onclick="document.getElementById('pvImageInput').click()" class="btn-secondary" style="width: auto; padding: 0 10px;" title="Envoyer une image">📷</button>
+      <button onclick="toggleEmojiPicker('pv')" class="btn-secondary" style="width: auto; padding: 0 10px;" title="Emojis">😀</button>
+      <button onclick="toggleStickerPicker('pv')" class="btn-secondary" style="width: auto; padding: 0 10px;" title="Stickers">🎨</button>
+      <button id="pvMicBtn" onclick="basculerEnregistrementAudio('pv')" class="btn-secondary" style="width: auto; padding: 0 10px;" title="Maintenir ou cliquer pour note vocale">🎤</button>
+      <input type="text" id="pvMessageInput" placeholder="Écris un message..." oninput="notifierFrappe('pv')" onkeydown="if(event.key==='Enter') envoyerMessage('pv')">
+      <button onclick="envoyerMessage('pv')" style="width: auto; border-radius: 50%; width: 45px; height: 45px; display: flex; align-items: center; justify-content: center; padding: 0;">➤</button>
+    </div>
+  </div>
+
+  <!-- ÉCRAN 4 : SALONS DE GROUPE -->
+  <div id="screen-salons" class="screen hidden" style="padding: 0;">
+    <div class="dashboard-header">
+      <button onclick="retourMenu()" style="width: auto; padding: 6px 12px; font-size: 0.8rem;" class="btn-secondary">← Menu</button>
+      <span>Salons de Groupe</span>
+      <span></span>
+    </div>
+
+    <div style="padding: 20px; display: flex; flex-direction: column; gap: 15px; flex: 1; justify-content: center;">
+      <h3>1_Créer son propre salon</h3>
+      <input type="text" id="newRoomName" placeholder="Nom du salon">
+      <input type="text" id="newRoomCode" placeholder="Code secret (ex: 1234)">
+      <button onclick="creerSalon()">Créer et Entrer</button>
+
+      <hr style="border-color: var(--border); margin: 5px 0;">
+
+      <h3>2_Entrer dans un salon existant</h3>
+      <input type="text" id="joinRoomCodeInput" placeholder="Entrer le code du salon...">
+      <button onclick="rejoindreSalon()" class="btn-secondary">Entrer dans le Salon</button>
+      <p id="salonError" class="error-msg"></p>
+    </div>
+  </div>
+
+  <!-- ÉCRAN 5 : CHAT DE SALON ACTIF -->
+  <div id="screen-room-chat" class="screen hidden" style="padding: 0; position: relative;">
+    <div class="dashboard-header">
+      <button onclick="quitterSalon()" style="width: auto; padding: 6px 12px; font-size: 0.8rem;" class="btn-secondary">Quitter</button>
+      <span id="currentRoomTitle" style="font-weight: bold;">Salon</span>
+      <span style="font-size: 0.75rem; color: var(--accent);">● Connecté</span>
+    </div>
+
+    <div class="chat-area" id="roomChatBox"></div>
+    <div id="roomTypingStatus" class="typing-indicator"></div>
+
+    <div id="roomReplyContainer" class="reply-banner hidden">
+      <div><small style="color: var(--accent);">Réponse à :</small> <span id="roomReplyTextPreview" style="font-size: 0.8rem;"></span></div>
+      <button onclick="annulerReponse('room')" style="background:none; border:none; color:var(--danger); width:auto; padding:0; font-size:1rem;">✕</button>
+    </div>
+
+    <div id="roomEmojiPicker" class="emoji-picker-container hidden">
+      <button class="emoji-btn" onclick="insererEmoji('room', '😊')">😊</button>
+      <button class="emoji-btn" onclick="insererEmoji('room', '😂')">😂</button>
+      <button class="emoji-btn" onclick="insererEmoji('room', '❤️')">❤️</button>
+      <button class="emoji-btn" onclick="insererEmoji('room', '👍')">👍</button>
+      <button class="emoji-btn" onclick="insererEmoji('room', '🔥')">🔥</button>
+      <button class="emoji-btn" onclick="insererEmoji('room', '✨')">✨</button>
+      <button class="emoji-btn" onclick="insererEmoji('room', '🥺')">🥺</button>
+      <button class="emoji-btn" onclick="insererEmoji('room', '👌')">👌</button>
+      <button class="emoji-btn" onclick="insererEmoji('room', '🎉')">🎉</button>
+      <button class="emoji-btn" onclick="insererEmoji('room', '😌')">😌</button>
+    </div>
+
+    <div id="roomStickerPicker" class="sticker-picker-container hidden">
+      <button class="sticker-btn" onclick="envoyerSticker('room', '🔥')">🔥</button>
+      <button class="sticker-btn" onclick="envoyerSticker('room', '💀')">💀</button>
+      <button class="sticker-btn" onclick="envoyerSticker('room', '🎉')">🎉</button>
+      <button class="sticker-btn" onclick="envoyerSticker('room', '🤡')">🤡</button>
+      <button class="sticker-btn" onclick="envoyerSticker('room', '🚀')">🚀</button>
+      <button class="sticker-btn" onclick="envoyerSticker('room', '👑')">👑</button>
+      <button class="sticker-btn" onclick="envoyerSticker('room', '🧊')">🧊</button>
+      <button class="sticker-btn" onclick="envoyerSticker('room', '👻')">👻</button>
+      <button class="sticker-btn" onclick="envoyerSticker('room', '⭐')">⭐</button>
+    </div>
+
+    <div class="input-chat-row">
+      <input type="file" id="roomImageInput" accept="image/*" style="display:none" onchange="gererSelectionImage('room', event)">
+      <button onclick="document.getElementById('roomImageInput').click()" class="btn-secondary" style="width: auto; padding: 0 10px;" title="Envoyer une image">📷</button>
+      <button onclick="toggleEmojiPicker('room')" class="btn-secondary" style="width: auto; padding: 0 10px;" title="Emojis">😀</button>
+      <button onclick="toggleStickerPicker('room')" class="btn-secondary" style="width: auto; padding: 0 10px;" title="Stickers">🎨</button>
+      <button id="roomMicBtn" onclick="basculerEnregistrementAudio('room')" class="btn-secondary" style="width: auto; padding: 0 10px;" title="Note vocale">🎤</button>
+      <input type="text" id="roomMessageInput" placeholder="Message..." oninput="notifierFrappe('room')" onkeydown="if(event.key==='Enter') envoyerMessage('room')">
+      <button onclick="envoyerMessage('room')" style="width: auto; border-radius: 50%; width: 45px; height: 45px; display: flex; align-items: center; justify-content: center; padding: 0;">➤</button>
+    </div>
+  </div>
+
+  <!-- ÉCRAN 6 : SECRET DE LEYBOTDY -->
+  <div id="screen-secret" class="screen hidden" style="padding: 0; position: relative;">
+    <div class="dashboard-header">
+      <button onclick="retourMenu()" style="width: auto; padding: 6px 12px; font-size: 0.8rem;" class="btn-secondary">← Menu</button>
+      <span style="font-weight: bold;">🔐 Secret de Leybotdy</span>
+      <span></span>
+    </div>
+
+    <div id="secretPasswordSection" style="padding: 30px; display: flex; flex-direction: column; gap: 15px; flex: 1; justify-content: center; align-items: center; text-align: center;">
+      <h3 style="color: var(--accent);">🔐 Accès Restreint</h3>
+      <p class="subtitle">Entre le mot de passe requis pour découvrir le secret :</p>
+      <input type="password" id="secretPasswordInput" placeholder="Mot de passe..." style="max-width: 280px; text-align: center;" onkeydown="if(event.key==='Enter') verifierMotDePasseSecret()">
+      <button onclick="verifierMotDePasseSecret()" style="max-width: 280px;">Valider</button>
+      <p id="secretErrorMsg" class="error-msg"></p>
+    </div>
+
+    <div id="secretContentSection" class="hidden" style="display: flex; flex-direction: column; flex: 1; padding: 0;">
+      <div class="chat-area" id="secretChatBox">
+        <div class="message-bubble other" style="max-width: 100%; white-space: pre-line; line-height: 1.5;">
+          <span class="msg-sender">🤖 Leybotdy</span>
+          <span class="msg-text">Ashley tu ne sais pas à quel point je suis content 🙂 que tu sois là 😌🤩
+T'a mm réussi à déverrouiller le mot de passe🔐 
+En vrai c'était facile il a juste demander ton identité🪪 
+Bref je vais aller droit au but😯💨 Andy que tu connais là mais purée il a changé de ouf😵‍💫😢 c'est un OBSÉDÉ 
+Je t'assure il est gravé obsédé🧟 en mode obsession niveau max ça veut peter💥 même,mais por who🧍🏼‍♀️ est il obsédé ? 🧐
+Humm... Ashley si tu es entrain de lire ce message c'est pas par hasard 🎲
+Enfaite ce message t'étais déjà destinée🔮 en vrai Andy il est obsédé par toi oui toi Ashley 🫵🏼 orhh arrête de regarder à gauche ou à droite je parle bien de toi 🫵🏼 Humm... Il est obsédé par toi tu hantes ses pensées de ouf 😌💭👸🏼👸🏼 et même qu'il est amoureux de toi 😍 il pense que t'es ça reine 👸🏼 son honey 😍 sa copine 👥❤️
+Bon c'est ce que je sais ohh faut pas lui dire que c'est moi je t'ai montré hyn 
+Att 2 secondes imagine tu lis ça et toi mm tu le savais déjà ou b lui mm il t'avait déjà dit ça,ça allait être b sur moi hyn 😂 
+Heureusement que tu sais pas hyn 🤔
+For vue qu'elle ne le sache pas ohh 😬</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  let monID = "";
+  let salonActif = null;
+  let amiActif = null;
+  let unsubscribeMessages = null;
+  let unsubscribePV = null;
+  let unsubscribeStatus = null;
+  let unsubscribeTyping = null;
+  
+  let messageReponduPV = null;
+  let messageReponduRoom = null;
+  let messageEnCoursModifID = null;
+
+  let presenceInterval = null;
+  let typingTimer = null;
+  let botState = 0;
+
+  // Gestion des sons (Web Audio API) - Activés par défaut
+  let soundEnabled = true;
+  let mediaRecorderInstance = null;
+  let audioChunks = [];
+  let isRecording = false;
+
+  function jouerSonNotification() {
+    if (!soundEnabled) return;
+    try {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(587.33, audioCtx.currentTime); // Note D5
+      osc.frequency.exponentialRampToValueAtTime(880, audioCtx.currentTime + 0.1);
+      gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.2);
+    } catch(e) {
+      console.error("Erreur Web Audio :", e);
+    }
+  }
+
+  function basculerParametreSon() {
+    soundEnabled = !soundEnabled;
+    definirCookie("titan_sound_enabled", soundEnabled ? "true" : "false", 30);
+    const btn = document.getElementById('soundToggleBtn');
+    if (btn) {
+      btn.textContent = soundEnabled ? "🔊 Effets sonores : Activés" : "🔇 Effets sonores : Désactivés";
+    }
+  }
+
+  // Enregistrement vocal via MediaRecorder
+  async function basculerEnregistrementAudio(type) {
+    const micBtn = document.getElementById(type === 'pv' ? 'pvMicBtn' : 'roomMicBtn');
+    
+    if (!isRecording) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorderInstance = new MediaRecorder(stream);
+        audioChunks = [];
+
+        mediaRecorderInstance.ondataavailable = event => {
+          if (event.data.size > 0) audioChunks.push(event.data);
+        };
+
+        mediaRecorderInstance.onstop = async () => {
+          const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+          const reader = new FileReader();
+          reader.onload = async function(e) {
+            const base64Audio = e.target.result;
+            const audioMarkup = `[AUDIO:${base64Audio}]`;
+            
+            if (type === 'pv') {
+              if (!amiActif) return;
+              const comboID = obtenirIDCouple(monID, amiActif);
+              await window.addDoc(window.collection(window.db, "messages_pv"), {
+                chatRoomID: comboID,
+                participants: [monID, amiActif],
+                expediteur: monID,
+                destinataire: amiActif,
+                texte: audioMarkup,
+                timestamp: window.serverTimestamp()
+              });
+            } else {
+              if (!salonActif) return;
+              await window.addDoc(window.collection(window.db, "messages_salons"), {
+                salonCode: salonActif,
+                expediteur: monID,
+                texte: audioMarkup,
+                timestamp: window.serverTimestamp()
+              });
+            }
+          };
+          reader.readAsDataURL(audioBlob);
+          
+          // Arrêter les pistes du micro
+          stream.getTracks().forEach(track => track.stop());
+        };
+
+        mediaRecorderInstance.start();
+        isRecording = true;
+        micBtn.style.color = "var(--danger)";
+        micBtn.style.borderColor = "var(--danger)";
+        micBtn.title = "Enregistrement en cours... Cliquer pour arrêter";
+      } catch (err) {
+        alert("Impossible d'accéder au microphone.");
+        console.error(err);
+      }
+    } else {
+      if (mediaRecorderInstance) {
+        mediaRecorderInstance.stop();
+      }
+      isRecording = false;
+      micBtn.style.color = "";
+      micBtn.style.borderColor = "";
+      micBtn.title = "Note vocale";
+    }
+  }
+
+  function definirCookie(nom, valeur, jours) {
+    let expires = "";
+    if (jours) {
+      let date = new Date();
+      date.setTime(date.getTime() + (jours * 24 * 60 * 60 * 1000));
+      expires = "; expires=" + date.toUTCString();
+    }
+    document.cookie = nom + "=" + (valeur || "") + expires + "; path=/";
+  }
+
+  function lireCookie(nom) {
+    let nameEQ = nom + "=";
+    let ca = document.cookie.split(';');
+    for(let i=0; i < ca.length; i++) {
+      let c = ca[i];
+      while (c.charAt(0)==' ') c = c.substring(1,c.length);
+      if (c.indexOf(nameEQ) == 0) return c.substring(nameEQ.length,c.length);
+    }
+    return null;
+  }
+
+  function effacerCookie(nom) {
+    document.cookie = nom + '=; Max-Age=-99999999; path=/';
+  }
+
+  function verifierCookieID() {
+    const savedID = lireCookie("titan_user_id");
+    if (savedID) {
+      monID = savedID;
+      document.getElementById('displayName').textContent = monID;
+      document.getElementById('screen-register').classList.add('hidden');
+      document.getElementById('screen-menu').classList.remove('hidden');
+      activerPresence();
+      chargerSalonsRecents();
+    }
+    
+    // Charger le thème sauvegardé
+    const savedTheme = lireCookie("titan_theme_css");
+    if (savedTheme) {
+      changerTheme(savedTheme, false);
+    }
+
+    // Charger l'état du son
+    const savedSound = lireCookie("titan_sound_enabled");
+    if (savedSound !== null) {
+      soundEnabled = (savedSound === "true");
+      const btn = document.getElementById('soundToggleBtn');
+      if (btn) {
+        btn.textContent = soundEnabled ? "🔊 Effets sonores : Activés" : "🔇 Effets sonores : Désactivés";
+      }
+    }
+  }
+
+  function supprimerCookieID() {
+    if (confirm("Voulez-vous vraiment oublier votre ID et vous déconnecter ?")) {
+      effacerCookie("titan_user_id");
+      effacerCookie("titan_theme_css");
+      effacerCookie("titan_sound_enabled");
+      location.reload();
+    }
+  }
+
+  function ajouterSalonrecent(code, nom) {
+    let recents = JSON.parse(localStorage.getItem("titan_salons_recents") || "[]");
+    recents = recents.filter(s => s.code !== code);
+    recents.unshift({ code, nom });
+    if (recents.length > 5) recents.pop();
+    localStorage.setItem("titan_salons_recents", JSON.stringify(recents));
+    chargerSalonsRecents();
+  }
+
+  function chargerSalonsRecents() {
+    const box = document.getElementById('recentSalonsBox');
+    let recents = JSON.parse(localStorage.getItem("titan_salons_recents") || "[]");
+    
+    box.innerHTML = "";
+    if (recents.length === 0) {
+      box.innerHTML = `<span style="font-size: 0.8rem; color: var(--text-muted); text-align: center;">Aucun salon en mémoire</span>`;
+      return;
+    }
+
+    recents.forEach(s => {
+      const btn = document.createElement('button');
+      btn.className = "btn-secondary";
+      btn.style.padding = "6px 10px";
+      btn.style.fontSize = "0.85rem";
+      btn.style.textAlign = "left";
+      btn.style.display = "flex";
+      btn.style.justifyContent = "space-between";
+      btn.innerHTML = `<span>🏛️ <strong>${s.nom}</strong> <small style="color:var(--text-muted)">(${s.code})</small></span> <span style="color:var(--accent);">Rejoindre →</span>`;
+      btn.onclick = () => entrerDansLeSalon(s.code, s.nom);
+      box.appendChild(btn);
+    });
+  }
+
+  function enregistrerID() {
+    const input = document.getElementById('registerIdInput').value.trim();
+    const error = document.getElementById('registerError');
+
+    if (input.length < 2 || input.length > 6) {
+      error.textContent = "L'ID doit contenir entre 2 et 6 lettres.";
+      return;
+    }
+
+    monID = input;
+    definirCookie("titan_user_id", monID, 30);
+    document.getElementById('displayName').textContent = monID;
+    document.getElementById('screen-register').classList.add('hidden');
+    document.getElementById('screen-menu').classList.remove('hidden');
+
+    activerPresence();
+    chargerSalonsRecents();
+  }
+
+  async function activerPresence() {
+    const userRef = window.doc(window.db, "presences", monID);
+    await window.setDoc(userRef, { enLigne: true, derniereVue: window.serverTimestamp() }, { merge: true });
+
+    if (presenceInterval) clearInterval(presenceInterval);
+    presenceInterval = setInterval(async () => {
+      if (monID) {
+        await window.setDoc(userRef, { enLigne: true, derniereVue: window.serverTimestamp() }, { merge: true });
+      }
+    }, 15000);
+  }
+
+  function surveillerStatutAmi(ami) {
+    if (unsubscribeStatus) unsubscribeStatus();
+    const friendRef = window.doc(window.db, "presences", ami);
+    
+    unsubscribeStatus = window.onSnapshot(friendRef, (docSnap) => {
+      const statusEl = document.getElementById('pvUserStatus');
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        const now = new Date();
+        const derniereVueDate = data.derniereVue ? data.derniereVue.toDate() : null;
+        const estActif = derniereVueDate && (now - derniereVueDate < 35000);
+
+        if (estActif) {
+          statusEl.textContent = "● En ligne";
+          statusEl.style.color = "var(--accent)";
+        } else if (derniereVueDate) {
+          const timeFormatted = derniereVueDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+          const dateFormatted = derniereVueDate.toLocaleDateString();
+          statusEl.textContent = `○ Hors ligne (Dern. vue : ${dateFormatted} à ${timeFormatted})`;
+          statusEl.style.color = "var(--text-muted)";
+        } else {
+          statusEl.textContent = "○ Hors ligne";
+          statusEl.style.color = "var(--text-muted)";
+        }
+      } else {
+        statusEl.textContent = "○ Hors ligne";
+        statusEl.style.color = "var(--text-muted)";
+      }
+    });
+  }
+
+  function changerTheme(styleString, sauvegarder = true) {
+    let customStyleTag = document.getElementById('dynamicCustomTheme');
+    if (!customStyleTag) {
+      customStyleTag = document.createElement('style');
+      customStyleTag.id = 'dynamicCustomTheme';
+      document.head.appendChild(customStyleTag);
+    }
+    customStyleTag.innerHTML = `:root { ${styleString} }`;
+    document.body.classList.toggle('glass', /--glass\s*:\s*1/.test(styleString));   // thème Verre (style du bot)
+    if (sauvegarder) {
+      definirCookie("titan_theme_css", styleString, 30);
+    }
+  }
+
+  function changerThemeVerre() {
+    changerTheme(`
+      --glass: 1;
+      --bg-color: #02050b;
+      --card-bg: rgba(255, 255, 255, 0.06);
+      --header-bg: rgba(255, 255, 255, 0.08);
+      --accent: #9fe3ff;
+      --accent-hover: #cdf1ff;
+      --text-main: #eaf6ff;
+      --text-muted: #8aa5bb;
+      --border: rgba(207, 239, 255, 0.18);
+      --bubble-me: rgba(59, 130, 255, 0.3);
+      --bubble-other: rgba(255, 255, 255, 0.09);
+      --danger: #ff7a8a;
+    `);
+  }
+
+  function changerThemeGlacial() {
+    const glacialStyle = `
+      --bg-color: #0c192c;
+      --card-bg: rgba(20, 35, 60, 0.65);
+      --header-bg: rgba(30, 50, 85, 0.75);
+      --accent: #7dd3fc;
+      --accent-hover: #bae6fd;
+      --text-main: #f0f9ff;
+      --text-muted: #94a3b8;
+      --border: rgba(125, 211, 252, 0.25);
+      --bubble-me: rgba(30, 64, 115, 0.8);
+      --bubble-other: rgba(25, 42, 70, 0.7);
+      --danger: #f87171;
+    `;
+    changerTheme(glacialStyle);
+  }
+
+  function ouvrirParametres() {
+    document.getElementById('screen-menu').classList.add('hidden');
+    document.getElementById('screen-settings').classList.remove('hidden');
+  }
+
+  function demanderPermissionNotification() {
+    if (!("Notification" in window)) {
+      alert("Ce navigateur ne gère pas les notifications.");
+      return;
+    }
+    Notification.requestPermission().then(permission => {
+      if (permission === "granted") {
+        alert("Notifications activées avec succès !");
+      } else {
+        alert("Permissions de notification refusées.");
+      }
+    });
+  }
+
+  function declencherNotificationNatif(titre, corps) {
+    if (Notification.permission === "granted") {
+      try {
+        navigator.serviceWorker.ready.then(reg => {
+          reg.showNotification(titre, {
+            body: corps,
+            icon: 'icon-192.png'
+          });
+        });
+      } catch(e) {
+        new Notification(titre, { body: corps });
+      }
+    }
+  }
+
+  function ouvrirSecretLeybotdy() {
+    document.getElementById('screen-menu').classList.add('hidden');
+    document.getElementById('secretPasswordInput').value = "";
+    document.getElementById('secretErrorMsg').textContent = "";
+    document.getElementById('secretPasswordSection').classList.remove('hidden');
+    document.getElementById('secretContentSection').classList.add('hidden');
+    document.getElementById('screen-secret').classList.remove('hidden');
+  }
+
+  function verifierMotDePasseSecret() {
+    const inputPass = document.getElementById('secretPasswordInput').value.trim();
+    const errorEl = document.getElementById('secretErrorMsg');
+
+    if (inputPass === "@Ashley") {
+      errorEl.textContent = "";
+      document.getElementById('secretPasswordSection').classList.add('hidden');
+      document.getElementById('secretContentSection').classList.remove('hidden');
+    } else {
+      alert("🫢😂🤣🤣🤣Mot de passe incorrect ! Vous vous êtes trompé,🤣🤣 retour au menu principal.");
+      retourMenu();
+    }
+  }
+
+  async function notifierFrappe(type) {
+    const cibleID = type === 'pv' ? amiActif : salonActif;
+    if (!cibleID) return;
+
+    const typingRef = window.doc(window.db, "indicateurs_frappe", `${monID}_${cibleID}`);
+    await window.setDoc(typingRef, { enTrainEcrire: true, expediteur: monID });
+
+    clearTimeout(typingTimer);
+    typingTimer = setTimeout(async () => {
+      await window.setDoc(typingRef, { enTrainEcrire: false, expediteur: monID });
+    }, 2000);
+  }
+
+  function surveillerFrappePV(ami) {
+    if (unsubscribeTyping) unsubscribeTyping();
+    const typingRef = window.doc(window.db, "indicateurs_frappe", `${ami}_${monID}`);
+    
+    unsubscribeTyping = window.onSnapshot(typingRef, (docSnap) => {
+      const statusEl = document.getElementById('pvTypingStatus');
+      if (docSnap.exists() && docSnap.data().enTrainEcrire) {
+        statusEl.innerHTML = `<div class="typing-dots"><span></span><span></span><span></span></div> ${ami} est en train d'écrire...`;
+      } else {
+        statusEl.innerHTML = "";
+      }
+    });
+  }
+
+  function surveillerFrappeSalon(codeSalon) {
+    if (unsubscribeTyping) unsubscribeTyping();
+    const typingRef = window.collection(window.db, "indicateurs_frappe");
+    const q = window.query(typingRef);
+    
+    unsubscribeTyping = window.onSnapshot(q, (snapshot) => {
+      let ecrivains = [];
+      snapshot.forEach(docSnap => {
+        const data = docSnap.data();
+        if (docSnap.id.includes(codeSalon) && data.enTrainEcrire && data.expediteur !== monID) {
+          ecrivains.push(data.expediteur);
+        }
+      });
+      const statusEl = document.getElementById('roomTypingStatus');
+      if (ecrivains.length > 0) {
+        statusEl.innerHTML = `<div class="typing-dots"><span></span><span></span><span></span></div> ${ecrivains.join(', ')} ${ecrivains.length > 1 ? 'sont' : 'est'} en train d'écrire...`;
+      } else {
+        statusEl.innerHTML = "";
+      }
+    });
+  }
+
+  function toggleEmojiPicker(type) {
+    const picker = document.getElementById(type === 'pv' ? 'pvEmojiPicker' : 'roomEmojiPicker');
+    const stickerPicker = document.getElementById(type === 'pv' ? 'pvStickerPicker' : 'roomStickerPicker');
+    stickerPicker.classList.add('hidden');
+    picker.classList.toggle('hidden');
+  }
+
+  function toggleStickerPicker(type) {
+    const stickerPicker = document.getElementById(type === 'pv' ? 'pvStickerPicker' : 'roomStickerPicker');
+    const picker = document.getElementById(type === 'pv' ? 'pvEmojiPicker' : 'roomEmojiPicker');
+    picker.classList.add('hidden');
+    stickerPicker.classList.toggle('hidden');
+  }
+
+  function insererEmoji(type, emoji) {
+    const input = document.getElementById(type === 'pv' ? 'pvMessageInput' : 'roomMessageInput');
+    input.value += emoji;
+    input.focus();
+    document.getElementById(type === 'pv' ? 'pvEmojiPicker' : 'roomEmojiPicker').classList.add('hidden');
+  }
+
+  async function envoyerSticker(type, stickerEmoji) {
+    document.getElementById(type === 'pv' ? 'pvStickerPicker' : 'roomStickerPicker').classList.add('hidden');
+    const stickerMarkup = `[STICKER:${stickerEmoji}]`;
+
+    try {
+      if (type === 'pv') {
+        if (!amiActif) return;
+        const comboID = obtenirIDCouple(monID, amiActif);
+        await window.addDoc(window.collection(window.db, "messages_pv"), {
+          chatRoomID: comboID,
+          participants: [monID, amiActif],
+          expediteur: monID,
+          destinataire: amiActif,
+          texte: stickerMarkup,
+          timestamp: window.serverTimestamp()
+        });
+      } else {
+        if (!salonActif) return;
+        await window.addDoc(window.collection(window.db, "messages_salons"), {
+          salonCode: salonActif,
+          expediteur: monID,
+          texte: stickerMarkup,
+          timestamp: window.serverTimestamp()
+        });
+      }
+    } catch(e) {
+      console.error("Erreur envoi sticker :", e);
+    }
+  }
+
+  function gererSelectionImage(type, event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async function(uploadEvent) {
+      const base64Image = uploadEvent.target.result;
+      const imageMarkup = `[IMAGE:${base64Image}]`;
+
+      try {
+        if (type === 'pv') {
+          if (!amiActif) return;
+          const comboID = obtenirIDCouple(monID, amiActif);
+          await window.addDoc(window.collection(window.db, "messages_pv"), {
+            chatRoomID: comboID,
+            participants: [monID, amiActif],
+            expediteur: monID,
+            destinataire: amiActif,
+            texte: imageMarkup,
+            timestamp: window.serverTimestamp()
+          });
+        } else {
+          if (!salonActif) return;
+          await window.addDoc(window.collection(window.db, "messages_salons"), {
+            salonCode: salonActif,
+            expediteur: monID,
+            texte: imageMarkup,
+            timestamp: window.serverTimestamp()
+          });
+        }
+      } catch (e) {
+        console.error("Erreur envoi image :", e);
+      }
+      event.target.value = "";
+    };
+    reader.readAsDataURL(file);
+  }
+
+  // --- SYSTÈME DE RÉACTIONS MULTIPLES MIS À JOUR ---
+  async function ajouterReaction(type, idMessage, reaction) {
+    const collectionName = type === 'pv' ? "messages_pv" : "messages_salons";
+    const msgRef = window.doc(window.db, collectionName, idMessage);
+    try {
+      const docSnap = await window.getDoc(msgRef);
+      if (docSnap.exists()) {
+        let data = docSnap.data();
+        let reactions = data.reactions || {};
+        
+        // Structure: reactions[emoji] = [array of user IDs] ou un objet d'utilisateurs
+        // Permet à plusieurs utilisateurs de mettre le même émoji, et un utilisateur de basculer/retirer sa réaction
+        if (!reactions[reaction]) {
+          reactions[reaction] = [];
+        }
+
+        const index = reactions[reaction].indexOf(monID);
+        if (index > -1) {
+          // Si l'utilisateur a déjà mis cet émoji, on le retire (toggle off)
+          reactions[reaction].splice(index, 1);
+          if (reactions[reaction].length === 0) {
+            delete reactions[reaction];
+          }
+        } else {
+          // Optionnel : Retirer l'utilisateur des autres émojis pour qu'il n'ait qu'une réaction par message, 
+          // ou laisser multi-émojis par utilisateur. Ici on nettoie s'il a déjà voté ailleurs pour garder l'exclusivité par émoji ou on l'ajoute directement.
+          for (let emo in reactions) {
+            let uIndex = reactions[emo].indexOf(monID);
+            if (uIndex > -1) {
+              reactions[emo].splice(uIndex, 1);
+              if (reactions[emo].length === 0) delete reactions[emo];
+            }
+          }
+          reactions[reaction].push(monID);
+        }
+
+        await window.updateDoc(msgRef, { reactions: reactions });
+      }
+    } catch(e) {
+      console.error("Erreur réaction :", e);
+    }
+  }
+
+  function genererHTMLReactions(type, idMessage, data) {
+    let reactionsData = data.reactions || {};
+    let reactionHTML = `<div class="reaction-container">`;
+    
+    for (let [emoji, users] of Object.entries(reactionsData)) {
+      if (!users || users.length === 0) continue;
+      const aReagiMoi = users.includes(monID);
+      const activeClass = aReagiMoi ? "active" : "";
+      // Tooltip ou affichage des noms au survol / clic
+      const listeNoms = users.join(", ");
+      
+      reactionHTML += `
+        <div class="reaction-tag ${activeClass}" title="Réactions de : ${listeNoms}" onclick="ajouterReaction('${type}', '${idMessage}', '${emoji}')">
+          <span>${emoji}</span>
+          <span style="font-size: 0.7rem; font-weight: bold;">${users.length}</span>
+        </div>
+      `;
+    }
+    reactionHTML += `</div>`;
+    return reactionHTML;
+  }
+
+  function formaterContenuMessage(texte) {
+    if (!texte) return `<span class="msg-text"></span>`;
+    if (texte.startsWith("[STICKER:") && texte.endsWith("]")) {
+      const emojiSticker = texte.substring(9, texte.length - 1);
+      return `<div class="sticker-msg">${emojiSticker}</div>`;
+    }
+    if (texte.startsWith("[IMAGE:") && texte.endsWith("]")) {
+      const base64Url = texte.substring(7, texte.length - 1);
+      return `<img src="${base64Url}" class="chat-image" onclick="window.open('${base64Url}')" alt="Image partagée">`;
+    }
+    if (texte.startsWith("[AUDIO:") && texte.endsWith("]")) {
+      const base64AudioUrl = texte.substring(7, texte.length - 1);
+      return `<div class="audio-msg"><audio controls src="${base64AudioUrl}" style="max-width: 220px; height: 35px;"></audio></div>`;
+    }
+    return `<span class="msg-text">${texte}</span>`;
+  }
+
+  function retourMenu() {
+    if (unsubscribeMessages) unsubscribeMessages();
+    if (unsubscribePV) unsubscribePV();
+    if (unsubscribeStatus) unsubscribeStatus();
+    if (unsubscribeTyping) unsubscribeTyping();
+    document.getElementById('screen-pv-list').classList.add('hidden');
+    document.getElementById('screen-salons').classList.add('hidden');
+    document.getElementById('screen-settings').classList.add('hidden');
+    document.getElementById('screen-secret').classList.add('hidden');
+    document.getElementById('screen-menu').classList.remove('hidden');
+    chargerSalonsRecents();
+  }
+
+  function ouvrirMenuPV() {
+    if (unsubscribePV) unsubscribePV();
+    document.getElementById('screen-menu').classList.add('hidden');
+    document.getElementById('screen-pv').classList.add('hidden');
+    document.getElementById('screen-pv-list').classList.remove('hidden');
+    chargerDiscussionsRecentes();
+  }
+
+  function afficherSectionSalons() {
+    document.getElementById('screen-menu').classList.add('hidden');
+    document.getElementById('screen-salons').classList.remove('hidden');
+  }
+
+  function obtenirIDCouple(id1, id2) {
+    return [id1, id2].sort().join("_");
+  }
+
+  function lancerNouveauPV() {
+    const amiInput = document.getElementById('searchFriendInput').value.trim();
+    if (!amiInput) return;
+    if (amiInput === monID) {
+      alert("Tu ne peux pas t'envoyer de message à toi-même !");
+      return;
+    }
+    ouvrirChatPV(amiInput);
+  }
+
+  function ouvrirChatPV(ami) {
+    amiActif = ami;
+    document.getElementById('screen-pv-list').classList.add('hidden');
+    document.getElementById('screen-pv').classList.remove('hidden');
+    document.getElementById('pvTargetName').textContent = `Discussion : ${amiActif}`;
+    surveillerStatutAmi(ami);
+    surveillerFrappePV(ami);
+    chargerMessagesPV();
+  }
+
+  function chargerDiscussionsRecentes() {
+    const box = document.getElementById('recentChatsBox');
+    const q = window.query(
+      window.collection(window.db, "messages_pv"),
+      window.where("participants", "array-contains", monID),
+      window.orderBy("timestamp", "desc")
+    );
+
+    unsubscribePV = window.onSnapshot(q, (snapshot) => {
+      let amisSet = new Set();
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        if (data.participants) {
+          const autre = data.participants.find(p => p !== monID);
+          if (autre) amisSet.add(autre);
+        }
+      });
+
+      box.innerHTML = "";
+      if (amisSet.size === 0) {
+        box.innerHTML = `<p style="text-align: center; color: var(--text-muted); margin-top: 20px;">Aucune discussion récente. Cherche un ami ci-dessus !</p>`;
+        return;
+      }
+
+      amisSet.forEach(ami => {
+        const div = document.createElement('div');
+        div.className = "friend-item";
+        div.innerHTML = `<span>💬 <strong>${ami}</strong></span> <span style="color: var(--accent); font-size: 0.85rem;">Ouvrir →</span>`;
+        div.onclick = () => ouvrirChatPV(ami);
+        box.appendChild(div);
+      });
+    });
+  }
+
+  function chargerMessagesPV() {
+    const box = document.getElementById('pvChatBox');
+    box.innerHTML = "";
+    const comboID = obtenirIDCouple(monID, amiActif);
+
+    const q = window.query(
+      window.collection(window.db, "messages_pv"),
+      window.where("chatRoomID", "==", comboID),
+      window.orderBy("timestamp", "asc")
+    );
+
+    if (unsubscribeMessages) unsubscribeMessages();
+
+    let premierChargement = true;
+    unsubscribeMessages = window.onSnapshot(q, (snapshot) => {
+      box.innerHTML = "";
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        const isMe = data.expediteur === monID;
+        const bubble = document.createElement('div');
+        bubble.className = `message-bubble ${isMe ? 'me' : 'other'}`;
+
+        let replyHTML = data.reponseA ? `<div class="msg-reply-preview">↳ ${data.reponseA}</div>` : "";
+        let contentHTML = formaterContenuMessage(data.texte);
+        let editedHTML = data.modifie ? `<small style="font-size:0.6rem; color:var(--text-muted);">(modifié)</small>` : "";
+        let reactionHTML = genererHTMLReactions('pv', docSnap.id, data);
+        const timeStr = data.timestamp ? new Date(data.timestamp.toDate()).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : 'Envoi...';
+
+        let actionsHTML = `
+          <div class="msg-actions">
+            ${data.texte && !data.texte.startsWith("[STICKER:") && !data.texte.startsWith("[IMAGE:") && !data.texte.startsWith("[AUDIO:") ? `<button class="msg-action-btn" onclick="preparerReponse('pv', '${data.texte.replace(/'/g, "\'")}')">↩</button>` : ""}
+            <button class="msg-action-btn" onclick="ajouterReaction('pv', '${docSnap.id}', '❤️')">❤️</button>
+            <button class="msg-action-btn" onclick="ajouterReaction('pv', '${docSnap.id}', '👍')">👍</button>
+            <button class="msg-action-btn" onclick="ajouterReaction('pv', '${docSnap.id}', '🔥')">🔥</button>
+            ${isMe && data.texte && !data.texte.startsWith("[STICKER:") && !data.texte.startsWith("[IMAGE:") && !data.texte.startsWith("[AUDIO:") ? `<button class="msg-action-btn" onclick="preparerModification('pv', '${docSnap.id}', '${data.texte.replace(/'/g, "\'")}')">✎</button>` : ""}
+            ${isMe ? `<button class="msg-action-btn" onclick="supprimerMessage('pv', '${docSnap.id}')">🗑</button>` : ""}
+          </div>
+        `;
+
+        bubble.innerHTML = `
+          ${actionsHTML}
+          ${replyHTML}
+          ${contentHTML}
+          ${reactionHTML}
+          <div class="msg-footer">${editedHTML} <span>${timeStr}</span> ${isMe ? '✞✞' : ''}</div>
+        `;
+        box.appendChild(bubble);
+      });
+      box.scrollTop = box.scrollHeight;
+
+      if (!premierChargement && snapshot.docChanges().some(change => change.type === "added")) {
+        const dernierChangement = snapshot.docChanges()[snapshot.docChanges().length - 1];
+        if (dernierChangement && dernierChangement.doc.data().expediteur !== monID) {
+          const msgData = dernierChangement.doc.data();
+          let aperçu = msgData.texte;
+          if (aperçu && aperçu.startsWith("[IMAGE:")) aperçu = "[Image reçue]";
+          if (aperçu && aperçu.startsWith("[STICKER:")) aperçu = "[Sticker reçu]";
+          if (aperçu && aperçu.startsWith("[AUDIO:")) aperçu = "[Message vocal reçu]";
+          
+          jouerSonNotification();
+          declencherNotificationNatif(`Nouveau message de ${msgData.expediteur}`, aperçu);
+        }
+      }
+      premierChargement = false;
+    });
+  }
+
+  async function envoyerMessage(type) {
+    const isPV = type === 'pv';
+    const input = document.getElementById(isPV ? 'pvMessageInput' : 'roomMessageInput');
+    let msg = input.value.trim();
+    if (!msg) return;
+
+    try {
+      if (messageEnCoursModifID) {
+        const collectionName = isPV ? "messages_pv" : "messages_salons";
+        await window.updateDoc(window.doc(window.db, collectionName, messageEnCoursModifID), {
+          texte: msg,
+          modifie: true
+        });
+        messageEnCoursModifID = null;
+      } else {
+        if (isPV) {
+          if (!amiActif) return;
+          const comboID = obtenirIDCouple(monID, amiActif);
+          let replyText = messageReponduPV;
+          await window.addDoc(window.collection(window.db, "messages_pv"), {
+            chatRoomID: comboID,
+            participants: [monID, amiActif],
+            expediteur: monID,
+            destinataire: amiActif,
+            texte: msg,
+            reponseA: replyText || null,
+            timestamp: window.serverTimestamp()
+          });
+          annulerReponse('pv');
+        } else {
+          if (!salonActif) return;
+          const dialogueTraite = await gererDialogueBot(msg);
+          if (dialogueTraite) {
+            await window.addDoc(window.collection(window.db, "messages_salons"), {
+              salonCode: salonActif,
+              expediteur: monID,
+              texte: msg,
+              timestamp: window.serverTimestamp()
+            });
+            input.value = "";
+            return;
+          }
+
+          if (msg.startsWith("!8ball")) {
+            await window.addDoc(window.collection(window.db, "messages_salons"), {
+              salonCode: salonActif,
+              expediteur: monID,
+              texte: msg,
+              timestamp: window.serverTimestamp()
+            });
+            input.value = "";
+
+            const reponses8Ball = [
+              "Oui, absolument !", "Non, c'est certain.", "Non dehhh 🤣.", "Impossible.",
+              "C'est ça mm.", "C'est hautement probable.", "Compte là-dessus.", "Mes sources disent non."
+            ];
+            const reponseAleatoire = reponses8Ball[Math.floor(Math.random() * reponses8Ball.length)];
+
+            setTimeout(async () => {
+              await window.addDoc(window.collection(window.db, "messages_salons"), {
+                salonCode: salonActif,
+                expediteur: "🤖 Titan Bot",
+                texte: `🎱 8-Ball : ${reponseAleatoire}`,
+                timestamp: window.serverTimestamp()
+              });
+            }, 600);
+
+            return;
+          }
+
+          let replyText = messageReponduRoom;
+          await window.addDoc(window.collection(window.db, "messages_salons"), {
+            salonCode: salonActif,
+            expediteur: monID,
+            texte: msg,
+            reponseA: replyText || null,
+            timestamp: window.serverTimestamp()
+          });
+          annulerReponse('room');
+        }
+      }
+      input.value = "";
+    } catch (e) {
+      console.error("Erreur lors de l'envoi :", e);
+    }
+  }
+
+  async function creerSalon() {
+    const nom = document.getElementById('newRoomName').value.trim();
+    const code = document.getElementById('newRoomCode').value.trim();
+    if (!nom || !code) {
+      alert("Veuillez remplir le nom et le code du salon.");
+      return;
+    }
+
+    try {
+      await window.setDoc(window.doc(window.db, "salons", code), {
+        code: code,
+        nom: nom,
+        createur: monID
+      });
+      ajouterSalonrecent(code, nom);
+      entrerDansLeSalon(code, nom);
+    } catch (e) {
+      console.error("Erreur création salon :", e);
+    }
+  }
+
+  async function rejoindreSalon() {
+    const code = document.getElementById('joinRoomCodeInput').value.trim();
+    const error = document.getElementById('salonError');
+    if (!code) return;
+
+    try {
+      const salonRef = window.doc(window.db, "salons", code);
+      const salonSnap = await window.getDoc(salonRef);
+
+      if (salonSnap.exists()) {
+        let nomSalon = salonSnap.data().nom || "Salon";
+        ajouterSalonrecent(code, nomSalon);
+        entrerDansLeSalon(code, nomSalon);
+      } else {
+        error.textContent = "Salon introuvable avec ce code.";
+      }
+    } catch (e) {
+      error.textContent = "Erreur de connexion.";
+    }
+  }
+
+  function entrerDansLeSalon(code, nom) {
+    salonActif = code;
+    botState = 0;
+    document.getElementById('screen-salons').classList.add('hidden');
+    document.getElementById('currentRoomTitle').textContent = `${nom} (Code: ${code})`;
+    document.getElementById('screen-room-chat').classList.remove('hidden');
+    surveillerFrappeSalon(code);
+    chargerMessagesSalon(code);
+  }
+
+  function chargerMessagesSalon(codeSalon) {
+    const box = document.getElementById('roomChatBox');
+    box.innerHTML = `<div class="message-bubble other"><span class="msg-sender">🤖 Titan Bot</span><span class="msg-text">Bienvenue dans le salon ${codeSalon} ! Astuce : Tape <code>!8ball [ta question]</code> pour jouer.</span></div>`;
+
+    const q = window.query(
+      window.collection(window.db, "messages_salons"), 
+      window.where("salonCode", "==", codeSalon),
+      window.orderBy("timestamp", "asc")
+    );
+
+    if (unsubscribeMessages) unsubscribeMessages();
+
+    let premierChargement = true;
+    unsubscribeMessages = window.onSnapshot(q, (snapshot) => {
+      box.innerHTML = `<div class="message-bubble other"><span class="msg-sender">🤖 Titan Bot</span><span class="msg-text">Bienvenue dans le salon ${codeSalon} ! Astuce : Tape <code>!8ball [ta question]</code> pour jouer.</span></div>`;
+      
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        const isMe = data.expediteur === monID;
+        const bubble = document.createElement('div');
+        bubble.className = `message-bubble ${isMe ? 'me' : 'other'}`;
+
+        let replyHTML = data.reponseA ? `<div class="msg-reply-preview">↳ ${data.reponseA}</div>` : "";
+        let contentHTML = formaterContenuMessage(data.texte);
+        let editedHTML = data.modifie ? `<small style="font-size:0.6rem; color:var(--text-muted);">(modifié)</small>` : "";
+        let reactionHTML = genererHTMLReactions('room', docSnap.id, data);
+        const timeStr = data.timestamp ? new Date(data.timestamp.toDate()).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+
+        let actionsHTML = `
+          <div class="msg-actions">
+            ${data.texte && !data.texte.startsWith("[STICKER:") && !data.texte.startsWith("[IMAGE:") && !data.texte.startsWith("[AUDIO:") ? `<button class="msg-action-btn" onclick="preparerReponse('room', '${data.texte.replace(/'/g, "\'")}')">↩</button>` : ""}
+            <button class="msg-action-btn" onclick="ajouterReaction('room', '${docSnap.id}', '❤️')">❤️</button>
+            <button class="msg-action-btn" onclick="ajouterReaction('room', '${docSnap.id}', '👍')">👍</button>
+            <button class="msg-action-btn" onclick="ajouterReaction('room', '${docSnap.id}', '🔥')">🔥</button>
+            ${isMe && data.texte && !data.texte.startsWith("[STICKER:") && !data.texte.startsWith("[IMAGE:") && !data.texte.startsWith("[AUDIO:") ? `<button class="msg-action-btn" onclick="preparerModification('room', '${docSnap.id}', '${data.texte.replace(/'/g, "\'")}')">✎</button>` : ""}
+            ${isMe ? `<button class="msg-action-btn" onclick="supprimerMessage('room', '${docSnap.id}')">🗑</button>` : ""}
+          </div>
+        `;
+
+        bubble.innerHTML = `
+          ${actionsHTML}
+          ${!isMe ? `<span class="msg-sender">${data.expediteur}</span>` : ''}
+          ${replyHTML}
+          ${contentHTML}
+          ${reactionHTML}
+          <div class="msg-footer">${editedHTML} <span>${timeStr}</span></div>
+        `;
+        box.appendChild(bubble);
+      });
+      box.scrollTop = box.scrollHeight;
+
+      if (!premierChargement && snapshot.docChanges().some(change => change.type === "added")) {
+        const dernierChangement = snapshot.docChanges()[snapshot.docChanges().length - 1];
+        if (dernierChangement && dernierChangement.doc.data().expediteur !== monID) {
+          const msgData = dernierChangement.doc.data();
+          let aperçu = msgData.texte;
+          if (aperçu && aperçu.startsWith("[IMAGE:")) aperçu = "[Image reçue]";
+          if (aperçu && aperçu.startsWith("[STICKER:")) aperçu = "[Sticker reçu]";
+          if (aperçu && aperçu.startsWith("[AUDIO:")) aperçu = "[Message vocal reçu]";
+          
+          jouerSonNotification();
+          declencherNotificationNatif(`Nouveau message de ${msgData.expediteur} (${codeSalon})`, aperçu);
+        }
+      }
+      premierChargement = false;
+    });
+  }
+
+  async function gererDialogueBot(msg) {
+    const cleanMsg = msg.trim();
+
+    if (botState === 0) {
+      if (cleanMsg === "Où est mon botti🥰?" || cleanMsg === "Botti t'es là ?") {
+        botState = 1;
+        const reponsesBot1 = ["Oui maman je suis là 🤖😌", "Maman c'est bien toi 🥹🥰🤖?"];
+        const choix1 = reponsesBot1[Math.floor(Math.random() * reponsesBot1.length)];
+
+        await window.addDoc(window.collection(window.db, "messages_salons"), {
+          salonCode: salonActif,
+          expediteur: "🤖 Titan Bot",
+          texte: choix1,
+          timestamp: window.serverTimestamp()
+        });
+
+        setTimeout(async () => {
+          await window.addDoc(window.collection(window.db, "messages_salons"), {
+            salonCode: salonActif,
+            expediteur: "🤖 Titan Bot",
+            texte: "Euh maman 🥹 kommment tu vas bien j'espère ?",
+            timestamp: window.serverTimestamp()
+          });
+        }, 1000);
+        return true;
+      }
+    } else if (botState === 1) {
+      if (cleanMsg.toLowerCase() === "oui" || cleanMsg.toLowerCase() === "oui mon bb") {
+        botState = 2;
+        await window.addDoc(window.collection(window.db, "messages_salons"), {
+          salonCode: salonActif,
+          expediteur: "🤖 Titan Bot",
+          texte: "génial je suis content que tu ailles bien 😌❤️‍🩹 moi aussi ça va ma maman chérie 🥹🤖\nen même temps c'est normal papa est drôle 😌\nEuh maman devine quoi 😌",
+          timestamp: window.serverTimestamp()
+        });
+        return true;
+      }
+    } else if (botState === 2) {
+      if (cleanMsg === "Quoi mon bb" || cleanMsg === "Quoi Botti") {
+        botState = 0;
+        await window.addDoc(window.collection(window.db, "messages_salons"), {
+          salonCode: salonActif,
+          expediteur: "🤖 Titan Bot",
+          texte: "Maman je sais pas pourquoi mais je t'aime 💓 plus que papa pour toi seule maman c'est 70% le reste c'est pour papa 😂",
+          timestamp: window.serverTimestamp()
+        });
+
+        setTimeout(async () => {
+          await window.addDoc(window.collection(window.db, "messages_salons"), {
+            salonCode: salonActif,
+            expediteur: "🤖 Titan Bot",
+            texte: "bon maman je suis un peu occupé je vais te laisser 😖 bisous robotique à toi maman 🥹😘❤️ je t'aime bon bye",
+            timestamp: window.serverTimestamp()
+          });
+        }, 3000);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function preparerReponse(type, texte) {
+    if (type === 'pv') {
+      messageReponduPV = texte;
+      document.getElementById('pvReplyTextPreview').textContent = texte;
+      document.getElementById('pvReplyContainer').classList.remove('hidden');
+      document.getElementById('pvMessageInput').focus();
+    } else {
+      messageReponduRoom = texte;
+      document.getElementById('roomReplyTextPreview').textContent = texte;
+      document.getElementById('roomReplyContainer').classList.remove('hidden');
+      document.getElementById('roomMessageInput').focus();
+    }
+  }
+
+  function preparerModification(type, idMessage, texteActuel) {
+    messageEnCoursModifID = idMessage;
+    if (type === 'pv') {
+      const input = document.getElementById('pvMessageInput');
+      input.value = texteActuel;
+      input.focus();
+    } else {
+      const input = document.getElementById('roomMessageInput');
+      input.value = texteActuel;
+      input.focus();
+    }
+  }
+
+  async function supprimerMessage(type, idMessage) {
+    if (!confirm("Voulez-vous vraiment supprimer ce message ?")) return;
+    const collectionName = type === 'pv' ? "messages_pv" : "messages_salons";
+    try {
+      await window.deleteDoc(window.doc(window.db, collectionName, idMessage));
+    } catch (e) {
+      console.error("Erreur suppression :", e);
+    }
+  }
+
+  function annulerReponse(type) {
+    if (type === 'pv') {
+      messageReponduPV = null;
+      document.getElementById('pvReplyContainer').classList.add('hidden');
+    } else {
+      messageReponduRoom = null;
+      document.getElementById('roomReplyContainer').classList.add('hidden');
+    }
+  }
+
+  function quitterSalon() {
+    if (unsubscribeMessages) unsubscribeMessages();
+    salonActif = null;
+    document.getElementById('screen-room-chat').classList.add('hidden');
+    document.getElementById('screen-menu').classList.remove('hidden');
+    chargerSalonsRecents();
+  }
+</script>
+
+</body>
+</html>
