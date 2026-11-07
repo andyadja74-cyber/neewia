@@ -1265,6 +1265,21 @@ async function commandeRoutine(sock, msg, remoteJid) {
   return envoyerAvecDelai(sock, remoteJid, { text: texte }, { quoted: msg }, 'texte');
 }
 
+// 🏓 .ping → vitesse réelle d'envoi vers WhatsApp (sans le délai « humain ») + temps depuis le démarrage
+async function commandePing(sock, msg, remoteJid) {
+  const t0 = Date.now();
+  const envoye = await sock.sendMessage(remoteJid, { text: '🏓 Pong !' }, { quoted: msg });
+  const ms = Date.now() - t0;
+  if (envoye && envoye.key && envoye.key.id) { processedMessages.add(envoye.key.id); memoriserMonEnvoi(remoteJid, envoye.key); }
+  const texte = `🏓 *Pong !*\n⚡ Vitesse : *${ms} ms*\n⏱️ En ligne depuis : *${dureeLisible(process.uptime())}*`;
+  try {
+    await sock.sendMessage(remoteJid, { text: texte, edit: envoye.key });   // on modifie le message « Pong ! »
+  } catch (e) {
+    await sock.sendMessage(remoteJid, { text: texte }, { quoted: msg });   // anciennes versions : nouveau message
+  }
+  arreterComposing(sock, remoteJid);
+}
+
 // 💡 Astuces affichées dans l'accueil du menu
 const ASTUCES_MENU = [
   "Tape *.menu all* pour voir toutes les commandes d'un coup",
@@ -1314,6 +1329,7 @@ const CATEGORIES_MENU = [
       { groupe: '📸 Médias', noms: ['.voc'], args: '[texte]', desc: "Je dis ton texte en vocal (voix d'homme grave)" },
       { groupe: '📸 Médias', noms: ['.voc-f'], args: '[texte]', desc: "Je dis ton texte en vocal (voix de femme)" },
       { groupe: '🌐 Utilitaires', noms: ['.ia', '.gemini'], aff: '.ia', args: '[question]', desc: 'Discuter avec Gemini (comprend aussi les photos)' },
+      { groupe: '🌐 Utilitaires', noms: ['.ping'], exact: true, desc: 'Vitesse de réponse du bot' },
       { groupe: '🌐 Utilitaires', noms: ['.anime'], args: '[titre]', desc: 'Rechercher des informations sur un animé' },
       { groupe: '🌐 Utilitaires', noms: ['.translate', '.trad', '.traduire'], args: '[langue] [texte]', desc: 'Traduire un texte' },
       { groupe: '🌐 Utilitaires', noms: ['.dico', '.def', '.dictionnaire'], aff: '.dico', args: '[mot]', desc: 'Dictionnaire en ligne' },
@@ -3030,6 +3046,7 @@ async function startBot() {
       if (/^\.cute(\s|$)/.test(lowerText)) { await commandeCute(sock, msg, remoteJid, cleanText); return; }
       if (/^\.askwedding(\s|$)/.test(lowerText)) { await commandeAskWedding(sock, msg, remoteJid, acteurDe(msg, sock, remoteJid, senderJid)); return; }
       if (/^\.routine$/.test(lowerText)) { await commandeRoutine(sock, msg, remoteJid); return; }
+      if (lowerText.trim() === '.ping') { await commandePing(sock, msg, remoteJid); return; }
       if (/^\.del$/.test(lowerText)) {
         if (isFromBot) { await commandeDel(sock, remoteJid); return; }
         // Personne ayant trouvé le mot de passe : le bot efface SES propres messages, uniquement ceux envoyés depuis ce moment-là.
