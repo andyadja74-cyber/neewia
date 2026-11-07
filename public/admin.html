@@ -170,6 +170,27 @@ h1{background-image:linear-gradient(100deg,#e6edff 0%,#fff 28%,#d9d2ff 50%,#fff 
 .etape img{border-color:#ffffff40}
 @media(max-width:700px){.verre,.v{background:linear-gradient(140deg,#ffffff30,#ffffff12 50%,#ffffff1c)!important;box-shadow:var(--verre-in),0 12px 34px #0008}
 .tabbar{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:linear-gradient(160deg,#ffffff30,#ffffff14)!important}}
+
+/* 🧭 Navigation dans les messages */
+.mh{position:sticky;top:max(6px,env(safe-area-inset-top));z-index:15;padding:8px 10px;border-radius:20px;background:#0b1626ee;border:1px solid #ffffff22}
+.mh b{flex:1;min-width:0;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.mh .ret{flex:none;font-size:12px}
+#mlist{-webkit-user-select:text;user-select:text;overflow-anchor:none}
+.navflot{position:fixed;right:max(10px,env(safe-area-inset-right));bottom:calc(92px + env(safe-area-inset-bottom));z-index:25;display:none;flex-direction:column;gap:8px}
+.navflot.on{display:flex}
+.navflot button{width:44px;height:44px;padding:0;border-radius:50%;font-size:18px;line-height:1;color:#fff;background:#0b1626d9!important;border:1px solid #ffffff40!important;box-shadow:0 6px 18px #0008;cursor:pointer}
+.navflot button:active{transform:scale(.92)}
+.nouv{position:fixed;left:50%;bottom:calc(92px + env(safe-area-inset-bottom));transform:translateX(-50%);z-index:25;display:none;width:auto;padding:10px 18px;border-radius:99px;font-size:14px;font-weight:700;color:#04121f;background:linear-gradient(180deg,#e6f8ff,#8fd8ff);border:0;box-shadow:0 8px 24px #0009;cursor:pointer}
+.nouv.on{display:block}
+
+/* 🧠 Mémoire */
+.memo{margin:14px 0 4px;padding:14px 16px;border-radius:20px;background:linear-gradient(150deg,#ffffff24,#ffffff0a);border:1px solid #ffffff30}
+.memo .mt{display:flex;justify-content:space-between;align-items:baseline;gap:8px;font-size:14px}
+.memo .mt span{font-size:13px;color:var(--mut)}
+.memo .barre{height:10px;margin:10px 0 6px;border-radius:99px;background:#0006;overflow:hidden}
+.memo .barre i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#9fe3ff,#6fb6ff);transition:width .6s}
+.memo .barre i.mid{background:linear-gradient(90deg,#ffd27a,#ffb347)}
+.memo .barre i.haut{background:linear-gradient(90deg,#ff9aa5,#ff5c70)}
 </style></head><body>
 <div class="fond"><i></i><i></i></div><div class="motif"></div>
 <main class="v">
@@ -182,6 +203,7 @@ h1{background-image:linear-gradient(100deg,#e6edff 0%,#fff 28%,#d9d2ff 50%,#fff 
   <section id="liste">
     <div class="tuiles"><div class="t o"><b id="tO">0</b><span>Occupées</span></div><div class="t l"><b id="tL">0</b><span>Libres</span></div><div class="t"><b id="tT">0</b><span>Total</span></div></div>
     <div class="maj"><span id="maj">Actualisation…</span><button id="rafr" type="button">↻ Actualiser</button></div>
+    <div class="memo" id="memBox" style="display:none"></div>
     <button class="tousm" id="tousm" type="button">💬 Voir les messages de tous les bots</button>
     <button class="tousm" id="pushBtn" type="button">🔔 Activer les notifications admin</button>
     <p class="mc" id="pushStatus">Les alertes seront envoyées uniquement à cet appareil après activation.</p>
@@ -197,7 +219,7 @@ h1{background-image:linear-gradient(100deg,#e6edff 0%,#fff 28%,#d9d2ff 50%,#fff 
     <div id="lignes"></div><div class="err" id="err2"></div>
   </section>
   <section id="msgs">
-    <div class="mh"><button class="ret" id="retour" type="button">← Retour</button><b>💬 Messages</b></div>
+    <div class="mh"><button class="ret" id="retour" type="button">← Retour</button><b>💬 Messages</b><button class="ret" id="autoBtn" type="button" title="Effacer automatiquement les messages déjà consultés">🧹 Auto : ON</button></div>
     <div class="chips" id="chips"></div>
     <div class="seg" id="seg"><button data-s="tous" class="on">Tous</button><button data-s="recu">⬇ Reçus</button><button data-s="envoye">⬆ Envoyés</button></div>
     <div class="rech"><input id="mq" placeholder="Rechercher un mot, un nom, un numéro…" autocomplete="off"><select id="mconv"><option value="">Toutes les discussions</option></select><select id="mtype"><option value="">Tous types</option></select></div>
@@ -205,13 +227,17 @@ h1{background-image:linear-gradient(100deg,#e6edff 0%,#fff 28%,#d9d2ff 50%,#fff 
     <div id="mlist"></div>
   </section>
 </main><div class="toast" id="toast"></div><div id="lb"><img alt=""></div>
+<div class="navflot" id="navflot"><button id="nvHaut" type="button" aria-label="Tout en haut">⤒</button><button id="nvPrec" type="button" aria-label="Discussion précédente">▲</button><button id="nvSuiv" type="button" aria-label="Discussion suivante">▼</button><button id="nvBas" type="button" aria-label="Tout en bas">⤓</button></div>
+<button class="nouv" id="nouv" type="button">↓ Nouveaux messages</button>
 <nav class="tabbar"><a href="/"><em>🏠</em>Accueil</a><a href="/#aide"><em>❓</em>Aide</a><a href="/admin" class="on"><em>🔐</em>Admin</a></nav>
 <script>
 const $=i=>document.getElementById(i);let cle='',tm=null,dern=0,pt=null,botsListe=[],msgNums=[],msgSens='tous',msgTimer=null,rechT=null,chargementMsgs=false;
+let vus=new Map(),autoPurge=true,purgeInit=false,dernKeys=new Set(),nouvCompte=0;
+try{autoPurge=localStorage.getItem('autoPurge')!=='0';for(const p of JSON.parse(localStorage.getItem('vusAdmin')||'[]'))vus.set(p[0]+'|'+p[1],p)}catch(_){}
 const nom={connecte:'Connecté',code:'En attente du code',demarrage:'Démarrage',reconnexion:'Reconnexion',pause:'En pause (reste connecté)',en_attente_admin:'En attente admin · session conservée'};
 const toast=t=>{const e=$('toast');e.textContent=t;e.classList.add('on');clearTimeout(pt);pt=setTimeout(()=>e.classList.remove('on'),2600)};
 const compte=(id,v)=>{const e=$(id),a=+e.textContent,t0=performance.now();(function f(t){const k=Math.min(1,(t-t0)/500);e.textContent=Math.round(a+(v-a)*k);if(k<1)requestAnimationFrame(f)})(t0)};
-async function api(u,corps){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json','x-admin-key':cle},body:JSON.stringify(corps||{})});return{r,d:await r.json()}}
+async function api(u,corps){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json','x-admin-key':cle},body:JSON.stringify(corps||{})});let d;try{d=await r.json()}catch(_){d={erreur:'Réponse invalide du serveur (code '+r.status+').'}}return{r,d}}
 
 async function pushApi(u,corps){
   const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json','x-admin-key':cle},body:JSON.stringify(corps||{})});
@@ -277,6 +303,8 @@ async function charger(){
     botSel.innerHTML='<option value="">Choisir le bot expéditeur</option>'+d.sessions.filter(s=>!s.parque && (s.statut==='connecte'||s.statut==='pause')).map(s=>'<option value="'+esc(s.numero)+'">Bot +'+esc(s.numero)+' · '+esc(nom[s.statut]||s.statut)+'</option>').join('');
     if([...botSel.options].some(o=>o.value===botCur))botSel.value=botCur;
     $('entree').style.display='none';if($('msgs').style.display!=='block')$('liste').style.display='block';$('err2').textContent='';
+    if(!purgeInit){purgeInit=true;purgerVus()}
+    chargerMemoire();
     compte('tO',d.occupees);compte('tL',d.disponibles);compte('tT',d.total);dern=Date.now();
     $('lignes').innerHTML=d.sessions.length?d.sessions.map(s=>`<div class="ligne"><div class="av">${s.numero.slice(-2)}</div><div class="inf"><b>+${s.numero}</b><span class="${s.statut==='connecte'?'':'at'}"><i></i>${nom[s.statut]||s.statut}</span></div><div class="acts"><button class="mb" data-m="${s.numero}">💬 ${s.nb||0}</button>${s.parque?`<button class="mb" data-resume="${s.numero}">▶ Reprendre</button>`:`<button class="mb" data-${s.statut==='pause'?'resume':'pause'}="${s.numero}">${s.statut==='pause'?'▶ Reprendre':'⏸ Pause'}</button><button class="mb" data-swap="${s.numero}">⇄ Permuter</button>`}<button class="x" data-n="${s.numero}">Supprimer</button></div></div>`).join(''):'<div class="vide"><em>✦</em>Aucun ami connecté</div>';
   }catch(_){$('err2').textContent='Connexion impossible.'}
@@ -332,8 +360,20 @@ document.addEventListener('click',e=>{if(e.target.closest('button,a,.slot')&&nav
 
 /* 💬 messages reçus / envoyés par les bots */
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-function ouvrirMsgs(nums){derSig='';clearInterval(tm);msgNums=nums;$('liste').style.display='none';$('msgs').style.display='block';rendreChips();chargerMsgs();clearInterval(msgTimer);msgTimer=setInterval(()=>{if(document.visibilityState==='visible')chargerMsgs()},12000)}
-function fermerMsgs(){clearInterval(msgTimer);$('msgs').style.display='none';$('liste').style.display='block';clearInterval(tm);tm=setInterval(()=>{if(document.visibilityState==='visible')charger()},15000)}
+async function ouvrirMsgs(nums){
+  derSig='';dernKeys=new Set();nouvCompte=0;clearInterval(tm);clearInterval(msgTimer);msgNums=nums;
+  $('liste').style.display='none';$('msgs').style.display='block';$('navflot').classList.add('on');$('nouv').classList.remove('on');
+  scrollTo(0,0);rendreChips();
+  await purgerVus();                              // efface ce qui a déjà été consulté la fois d'avant
+  if($('msgs').style.display!=='block')return;
+  chargerMsgs();msgTimer=setInterval(()=>{if(document.visibilityState==='visible')chargerMsgs()},12000)
+}
+async function fermerMsgs(){
+  clearInterval(msgTimer);$('msgs').style.display='none';$('navflot').classList.remove('on');$('nouv').classList.remove('on');
+  $('liste').style.display='block';scrollTo(0,0);clearInterval(tm);tm=setInterval(()=>{if(document.visibilityState==='visible')charger()},15000);
+  await purgerVus();                              // les messages consultés disparaissent (RAM serveur + navigateur)
+  $('mlist').innerHTML='';derSig='';charger()
+}
 function rendreChips(){
   $('chips').innerHTML='<button data-b="" class="'+(msgNums.length?'':'on')+'">Tous les bots</button>'+botsListe.map(s=>'<button data-b="'+esc(s.numero)+'" class="'+(msgNums.includes(s.numero)?'on':'')+'">…'+esc(s.numero.slice(-4))+'</button>').join('')}
 async function chargerMsgs(){
@@ -346,7 +386,7 @@ async function chargerMsgs(){
     if(sel.dataset.o!==opts){sel.innerHTML=opts;sel.dataset.o=opts}
     const convSel=$('mconv'),convCur=convSel.value,convOpts='<option value="">Toutes les discussions</option>'+(d.conversations||[]).map(c=>'<option value="'+esc(c)+'"'+(c===convCur?' selected':'')+'>'+esc(c)+'</option>').join('');
     if(convSel.dataset.o!==convOpts){convSel.innerHTML=convOpts;convSel.dataset.o=convOpts}
-    $('mc').textContent=d.messages.length+' affiché(s) · '+d.total+' gardé(s) en mémoire (max '+d.max+' par bot)';
+    $('mc').textContent=d.messages.length+' affiché(s) · '+d.total+' gardé(s) en mémoire (max '+d.max+' par bot)'+(autoPurge?' · 🧹 effacés au retour':'');
     const multi=msgNums.length!==1;
     rendreChat(d.messages,multi);
   }catch(_){$('mc').textContent='Connexion impossible.'}
@@ -366,6 +406,11 @@ function rendreChat(liste,multi){
   if(sig===derSig)return;                       // rien de nouveau : on ne touche pas aux vocaux en cours
   const proche=!derSig||(innerHeight+scrollY>=document.body.scrollHeight-140);
   derSig=sig;
+  let ancre=null;                               // on retient le message visible pour ne pas « sauter » au rafraîchissement
+  if(!proche){for(const bb of $('mlist').querySelectorAll('.bub[data-k]')){const rc=bb.getBoundingClientRect();if(rc.bottom>90){ancre={k:bb.dataset.k,top:rc.top};break}}}
+  const cles=liste.map(m=>m.bot+'|'+m.id),nv=dernKeys.size?cles.filter(k=>!dernKeys.has(k)).length:0;dernKeys=new Set(cles);
+  if(autoPurge){liste.forEach(m=>vus.set(m.bot+'|'+m.id,[m.bot,m.id]));sauverVus()}
+  if(!proche&&nv>0){nouvCompte+=nv;const nb=$('nouv');nb.textContent='↓ '+nouvCompte+' nouveau'+(nouvCompte>1?'x':'')+' message'+(nouvCompte>1?'s':'');nb.classList.add('on')}
   if(!liste.length){$('mlist').innerHTML='<div class="vide"><em>💬</em>Aucun message pour ces filtres</div>';return}
   const groupes=new Map();
   liste.slice().sort((a,b)=>a.t-b.t).forEach(m=>{const k=m.bot+'|'+m.conv;if(!groupes.has(k))groupes.set(k,{conv:m.conv,bot:m.bot,msgs:[]});groupes.get(k).msgs.push(m)});
@@ -389,10 +434,11 @@ function rendreChat(liste,multi){
       if(m.texte)c+='<div class="tx">'+esc(m.texte)+'</div>';
       else if(!md)c+='<div class="tx"><i>('+esc(m.type)+')</i></div>';
       c+='<div class="hr"><span>'+(m.vue1?'👁 ':'')+esc(d.toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'}))+(env&&!m.groupe&&m.numero?' · '+esc(m.numero):'')+'</span><button class="delmsg" type="button" data-delbot="'+esc(g.bot)+'" data-delid="'+esc(m.id)+'" aria-label="Supprimer ce message">🗑 Delete</button></div>';
-      h+='<div class="bub '+(env?'env':'rec')+'" title="ID '+esc(m.id)+'">'+c+'</div>';
+      h+='<div class="bub '+(env?'env':'rec')+'" data-k="'+esc(g.bot+'|'+m.id)+'" title="ID '+esc(m.id)+'">'+c+'</div>';
     }
   }
   $('mlist').innerHTML=h+'</div>';
+  if(ancre){const el=[...$('mlist').querySelectorAll('.bub[data-k]')].find(x=>x.dataset.k===ancre.k);if(el)scrollBy(0,el.getBoundingClientRect().top-ancre.top)}
   if(io)io.disconnect();
   io=new IntersectionObserver(es=>es.forEach(async e=>{
     if(!e.isIntersecting)return;io.unobserve(e.target);
@@ -432,4 +478,56 @@ $('seg').onclick=e=>{const s=e.target.dataset&&e.target.dataset.s;if(!s)return;m
 $('mq').oninput=()=>{clearTimeout(rechT);rechT=setTimeout(chargerMsgs,300)};
 $('mtype').onchange=chargerMsgs;
 $('mconv').onchange=chargerMsgs;
+
+/* 🧠 Mémoire réelle du serveur (RSS du gestionnaire + de chaque bot) */
+const mo=b=>b==null?'?':Math.round(b/1048576)+' Mo';
+async function chargerMemoire(){
+  try{
+    const{r,d}=await api('/api/admin/memoire');if(!r.ok)return;
+    const pct=Math.round(d.total/d.limite*100),cl=pct>=85?'haut':pct>=70?'mid':'';
+    const apres=d.total+d.moyenneBot,pctApres=Math.round(apres/d.limite*100);
+    const detail='Gestionnaire '+mo(d.gestionnaire)+(d.bots.length?' · '+d.bots.map(b=>'bot …'+esc(b.numero.slice(-4))+' '+mo(b.rss)).join(' · '):'');
+    const prevu=d.moyenneBot?'Un bot de plus ≈ +'+mo(d.moyenneBot)+' → '+mo(apres)+' ('+pctApres+' %)'+(pctApres>=85?' ⚠️ trop risqué':pctApres>=70?' · limite':' · ça passe'):'';
+    $('memBox').innerHTML='<div class="mt"><b>🧠 Mémoire</b><span>'+mo(d.total)+' / '+mo(d.limite)+' ('+pct+' %)</span></div><div class="barre"><i class="'+cl+'" style="width:'+Math.min(100,pct)+'%"></i></div><p class="mc">'+detail+'</p><p class="mc">Pic depuis le démarrage : '+mo(d.pic)+(prevu?' · '+prevu:'')+'</p>';
+    $('memBox').style.display='block';
+  }catch(_){}
+}
+
+/* 🧹 Effacement automatique des messages consultés */
+const sauverVus=()=>{try{localStorage.setItem('vusAdmin',JSON.stringify([...vus.values()].slice(-600)))}catch(_){}};
+function libererBlobs(){blobs.forEach(u=>URL.revokeObjectURL(u));blobs.clear()}
+async function purgerVus(){
+  if(!autoPurge||!vus.size||!cle)return;
+  const items=[...vus.values()];
+  try{
+    for(let i=0;i<items.length;i+=300){
+      const lot=items.slice(i,i+300),{r}=await api('/api/admin/messages/purger',{items:lot.map(p=>({bot:p[0],id:p[1]}))});
+      if(!r.ok)return;
+      lot.forEach(p=>vus.delete(p[0]+'|'+p[1]));
+    }
+    sauverVus();libererBlobs();
+  }catch(_){}
+}
+function majAutoBtn(){$('autoBtn').textContent='🧹 Auto : '+(autoPurge?'ON':'OFF')}
+$('autoBtn').onclick=()=>{
+  autoPurge=!autoPurge;try{localStorage.setItem('autoPurge',autoPurge?'1':'0')}catch(_){}
+  if(!autoPurge){vus.clear();sauverVus()}else{derSig='';chargerMsgs()}
+  majAutoBtn();toast(autoPurge?'Les messages consultés seront effacés au retour':'Auto-effacement désactivé')
+};
+majAutoBtn();
+
+/* 🧭 Boutons de navigation : haut / bas / discussion précédente / suivante */
+function sauterConv(dir){
+  const hs=[...document.querySelectorAll('#mlist .ch')],off=84;let cible=null;
+  if(dir>0)cible=hs.find(h=>h.getBoundingClientRect().top>off+4);
+  else for(const h of hs)if(h.getBoundingClientRect().top<off-4)cible=h;
+  if(cible)scrollTo({top:scrollY+cible.getBoundingClientRect().top-off,behavior:'smooth'});
+  else scrollTo({top:dir>0?document.body.scrollHeight:0,behavior:'smooth'});
+}
+$('nvHaut').onclick=()=>scrollTo({top:0,behavior:'smooth'});
+$('nvBas').onclick=()=>scrollTo({top:document.body.scrollHeight,behavior:'smooth'});
+$('nvPrec').onclick=()=>sauterConv(-1);
+$('nvSuiv').onclick=()=>sauterConv(1);
+$('nouv').onclick=()=>{nouvCompte=0;$('nouv').classList.remove('on');scrollTo({top:document.body.scrollHeight,behavior:'smooth'})};
+addEventListener('scroll',()=>{if(innerHeight+scrollY>=document.body.scrollHeight-140){nouvCompte=0;$('nouv').classList.remove('on')}},{passive:true});
 </script><script src="/musique.js" defer></script></body></html>
