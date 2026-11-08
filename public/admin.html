@@ -191,6 +191,18 @@ h1{background-image:linear-gradient(100deg,#e6edff 0%,#fff 28%,#d9d2ff 50%,#fff 
 .memo .barre i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#9fe3ff,#6fb6ff);transition:width .6s}
 .memo .barre i.mid{background:linear-gradient(90deg,#ffd27a,#ffb347)}
 .memo .barre i.haut{background:linear-gradient(90deg,#ff9aa5,#ff5c70)}
+
+/* 👥 Contacts */
+#contacts{display:none}
+.ctc{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0;padding:12px 14px;border-radius:18px;background:linear-gradient(150deg,#ffffff24,#ffffff0a);border:1px solid #ffffff30;box-shadow:inset 1px 1px 0 #ffffff55,inset -1px -1px 0 #ffffff14}
+.ctc .ci{min-width:0;flex:1}
+.ctc .cn{font-weight:700;font-size:15px;word-break:break-word}
+.ctc .cp{font-size:16px;color:var(--ice);letter-spacing:.02em;-webkit-user-select:text;user-select:text}
+.ctc .cm{font-size:11px;color:var(--mut);margin-top:3px}
+.ctc .ca{display:flex;flex-direction:column;gap:6px}
+.ctc .ca button,.ctc .ca a{width:auto;padding:6px 10px;font-size:12px;text-align:center;text-decoration:none;cursor:pointer;color:#fff;background:linear-gradient(180deg,#ffffff30,#ffffff10);border:1px solid #ffffff40;border-radius:12px}
+.ctc .ca .sup{color:#ffc2c9;border-color:#ff8f9d44}
+.ctbar{display:flex;gap:8px;margin-top:8px}.ctbar button{flex:1}
 </style></head><body>
 <div class="fond"><i></i><i></i></div><div class="motif"></div>
 <main class="v">
@@ -205,7 +217,12 @@ h1{background-image:linear-gradient(100deg,#e6edff 0%,#fff 28%,#d9d2ff 50%,#fff 
     <div class="maj"><span id="maj">Actualisation…</span><button id="rafr" type="button">↻ Actualiser</button></div>
     <div class="memo" id="memBox" style="display:none"></div>
     <button class="tousm" id="tousm" type="button">💬 Voir les messages de tous les bots</button>
+    <button class="tousm" id="ctBtn" type="button">👥 Voir les numéros des contacts</button>
     <button class="tousm" id="pushBtn" type="button">🔔 Activer les notifications admin</button>
+    <button class="tousm" id="viderRam" type="button">🧹 Libérer la RAM de tous les bots</button>
+    <button class="tousm" id="toutSup" type="button" style="color:#ffc2c9">🗑 Supprimer tous les messages et numéros</button>
+    <p class="mc">Efface d'un coup, pour tous les bots : les messages gardés, leurs photos et vocaux, et la liste des numéros.</p>
+    <p class="mc" id="viderRamStatus">Vide les caches temporaires et les contextes IA, sans déconnecter les comptes ni effacer les profils.</p>
     <p class="mc" id="pushStatus">Les alertes seront envoyées uniquement à cet appareil après activation.</p>
     <button class="tousm" id="pushTest" type="button" style="display:none">🧪 Envoyer une notification test</button>
     <details class="mc" id="pushCfg" style="margin:6px 0 10px"><summary style="cursor:pointer">🔑 Clés des notifications (première configuration)</summary>
@@ -223,6 +240,13 @@ h1{background-image:linear-gradient(100deg,#e6edff 0%,#fff 28%,#d9d2ff 50%,#fff 
       <p class="mc" id="adminEnvoiStatus" role="status"></p>
     </section>
     <div id="lignes"></div><div class="err" id="err2"></div>
+  </section>
+  <section id="contacts">
+    <div class="mh"><button class="ret" id="ctRetour" type="button">← Retour</button><b>👥 Contacts</b></div>
+    <div class="rech"><input id="ctq" placeholder="Rechercher un nom ou un numéro…" autocomplete="off"><select id="ctbot"><option value="">Tous les bots</option></select></div>
+    <div class="ctbar"><button class="tousm" id="ctCsv" type="button">⬇ Exporter en CSV</button><button class="tousm" id="ctVider" type="button">🗑 Tout effacer</button></div>
+    <p class="mc" id="ctInfo"></p>
+    <div id="ctListe"></div>
   </section>
   <section id="msgs">
     <div class="mh"><button class="ret" id="retour" type="button">← Retour</button><b>💬 Messages</b><button class="ret" id="autoBtn" type="button" title="Effacer automatiquement les messages déjà consultés">🧹 Auto : ON</button></div>
@@ -311,11 +335,11 @@ async function charger(){
     const botSel=$('adminBot'),botCur=botSel.value;
     botSel.innerHTML='<option value="">Choisir le bot expéditeur</option>'+d.sessions.filter(s=>!s.parque && (s.statut==='connecte'||s.statut==='pause')).map(s=>'<option value="'+esc(s.numero)+'">Bot +'+esc(s.numero)+' · '+esc(nom[s.statut]||s.statut)+'</option>').join('');
     if([...botSel.options].some(o=>o.value===botCur))botSel.value=botCur;
-    $('entree').style.display='none';if($('msgs').style.display!=='block')$('liste').style.display='block';$('err2').textContent='';
+    $('entree').style.display='none';if($('msgs').style.display!=='block'&&$('contacts').style.display!=='block')$('liste').style.display='block';$('err2').textContent='';
     if(!purgeInit){purgeInit=true;purgerVus();actualiserEtatPush()}
     chargerMemoire();
     compte('tO',d.occupees);compte('tL',d.disponibles);compte('tT',d.total);dern=Date.now();
-    $('lignes').innerHTML=d.sessions.length?d.sessions.map(s=>`<div class="ligne"><div class="av">${s.numero.slice(-2)}</div><div class="inf"><b>+${s.numero}</b><span class="${s.statut==='connecte'?'':'at'}"><i></i>${nom[s.statut]||s.statut}</span></div><div class="acts"><button class="mb" data-m="${s.numero}">💬 ${s.nb||0}</button>${s.parque?`<button class="mb" data-resume="${s.numero}">▶ Reprendre</button>`:`<button class="mb" data-${s.statut==='pause'?'resume':'pause'}="${s.numero}">${s.statut==='pause'?'▶ Reprendre':'⏸ Pause'}</button><button class="mb" data-swap="${s.numero}">⇄ Permuter</button>`}<button class="x" data-n="${s.numero}">Supprimer</button></div></div>`).join(''):'<div class="vide"><em>✦</em>Aucun ami connecté</div>';
+    $('lignes').innerHTML=d.sessions.length?d.sessions.map(s=>`<div class="ligne"><div class="av">${s.numero.slice(-2)}</div><div class="inf"><b>+${s.numero}</b><span class="${s.statut==='connecte'?'':'at'}"><i></i>${nom[s.statut]||s.statut}</span></div><div class="acts"><button class="mb" data-m="${s.numero}">💬 ${s.nb||0}</button>${!s.parque?`<button class="mb" data-ram="${s.numero}">🧹 Vider RAM</button>`:''}${s.parque?`<button class="mb" data-resume="${s.numero}">▶ Reprendre</button>`:`<button class="mb" data-${s.statut==='pause'?'resume':'pause'}="${s.numero}">${s.statut==='pause'?'▶ Reprendre':'⏸ Pause'}</button><button class="mb" data-swap="${s.numero}">⇄ Permuter</button>`}<button class="x" data-n="${s.numero}">Supprimer</button></div></div>`).join(''):'<div class="vide"><em>✦</em>Aucun ami connecté</div>';
   }catch(_){$('err2').textContent='Connexion impossible.'}
 }
 setInterval(()=>{if(dern && document.visibilityState==='visible')$('maj').textContent='Actualisé il y a '+Math.round((Date.now()-dern)/1000)+' s'},5000);
@@ -324,6 +348,19 @@ $('mdp').onkeydown=e=>{if(e.key==='Enter')$('ok').click()};
 $('oeil').onclick=()=>{const m=$('mdp');m.type=m.type==='password'?'text':'password'};
 $('rafr').onclick=()=>{charger();toast('Liste actualisée')};
 $('pushBtn').onclick=basculerPush;
+$('viderRam').onclick=async()=>{
+  const btn=$('viderRam'),status=$('viderRamStatus');
+  if(!confirm('Vider les caches temporaires de TOUS les bots ? Les contextes IA et caches anti-delete/view-once en mémoire seront oubliés. Les comptes WhatsApp et profils resteront connectés.'))return;
+  btn.disabled=true;btn.textContent='Nettoyage en cours…';status.textContent='Demande envoyée aux bots…';
+  try{
+    const{r,d}=await api('/api/admin/memoire/liberer');
+    if(!r.ok)throw new Error(d.erreur||'Nettoyage impossible.');
+    status.textContent='✔ '+(d.nettoyes??0)+' / '+(d.bots??0)+' bot(s) nettoyé(s) · '+(d.avertissementsEnvoyes??0)+' avertissement(s) envoyé(s) à leur propre compte WhatsApp.';
+    toast('Nettoyage terminé · avertissements envoyés');
+    await chargerMemoire();
+  }catch(e){status.textContent=e.message||'Erreur pendant le nettoyage.'}
+  finally{btn.disabled=false;btn.textContent='🧹 Libérer la RAM de tous les bots'}
+};
 $('pushTest').onclick=async()=>{const{r,d}=await api('/api/admin/push/test');toast(r.ok?'Test envoyé à '+d.envoyes+' appareil(s) sur '+d.abonnes:(d.erreur||'Échec du test'))};
 $('pushGen').onclick=async()=>{const{r,d}=await api('/api/admin/push/generer');if(!r.ok){toast(d.erreur||'Erreur');return}const t=$('pushCles');t.value='VAPID_PUBLIC_KEY='+d.publicKey+'\nVAPID_PRIVATE_KEY='+d.privateKey+'\nVAPID_SUBJECT=mailto:ton-email@exemple.com';t.style.display='block';t.focus();t.select()};
 $('adminEnvoyer').onclick=async()=>{
@@ -345,6 +382,22 @@ $('adminEnvoyer').onclick=async()=>{
 $('lignes').onclick=async e=>{
   const target=e.target.closest('button');if(!target)return;
   const m=target.dataset.m;if(m){ouvrirMsgs([m]);return}
+  const ram=target.dataset.ram;
+  if(ram){
+    if(!confirm('Vider la mémoire temporaire du bot +'+ram+' ? Après le nettoyage, ce bot enverra un avertissement à son propre compte WhatsApp.'))return;
+    target.disabled=true;target.textContent='Nettoyage…';
+    try{
+      const{r,d}=await api('/api/admin/memoire/liberer',{numero:ram});
+      if(!r.ok)throw new Error(d.erreur||'Nettoyage impossible.');
+      const resultat=(d.resultats||[])[0]||{};
+      if(resultat.ok){
+        toast(resultat.notificationEnvoyee?'RAM vidée · avertissement envoyé':'RAM vidée, mais avertissement non envoyé');
+        $('err2').textContent=resultat.notificationEnvoyee?'✔ Bot +'+ram+' : mémoire temporaire vidée et avertissement envoyé à son propre compte WhatsApp.':'⚠️ Bot +'+ram+' : mémoire vidée, mais l’avertissement WhatsApp n’a pas pu être envoyé. '+(resultat.erreur||'');
+      }else throw new Error(resultat.erreur||'Le bot n’a pas confirmé le nettoyage.');
+    }catch(err){$('err2').textContent=err.message||'Erreur pendant le nettoyage.'}
+    finally{target.disabled=false;target.textContent='🧹 Vider RAM';charger()}
+    return;
+  }
   const n=target.dataset.pause||target.dataset.resume||target.dataset.swap||target.dataset.n;
   if(!n)return;
   if(target.dataset.n){
@@ -482,6 +535,60 @@ $('mlist').addEventListener('click',async e=>{
 });
 $('lb').onclick=()=>$('lb').classList.remove('on');
 $('tousm').onclick=()=>ouvrirMsgs([]);
+
+/* 👥 Contacts : numéros des personnes avec qui les bots discutent */
+let ctTimer=null,ctListe=[],ctRech=null;
+const tempsRel=t=>{const m=Math.floor((Date.now()-t)/60000);if(m<1)return "à l'instant";if(m<60)return 'il y a '+m+' min';const h=Math.floor(m/60);if(h<24)return 'il y a '+h+' h';const j=Math.floor(h/24);return j<30?'il y a '+j+' j':new Date(t).toLocaleDateString('fr-FR')};
+async function chargerContacts(){
+  const{r,d}=await api('/api/admin/contacts',{q:$('ctq').value,bot:$('ctbot').value});
+  if(!r.ok){toast(d.erreur||'Impossible de charger les contacts');return}
+  ctListe=d.contacts;
+  const sel=$('ctbot'),cur=sel.value;
+  if(sel.options.length-1!==d.bots.length){sel.innerHTML='<option value="">Tous les bots</option>'+d.bots.map(b=>'<option value="'+esc(b)+'">Bot …'+esc(b.slice(-4))+'</option>').join('');sel.value=cur}
+  $('ctInfo').textContent=d.total+' numéro'+(d.total>1?'s':'')+' enregistré'+(d.total>1?'s':'')+(d.correspondants!==d.total?' · '+d.correspondants+' affiché'+(d.correspondants>1?'s':''):'')
+    +(d.masques?' · '+d.masques+' contact'+(d.masques>1?'s':'')+' dont WhatsApp cache le numéro (non capturable)':'')+' · la capture commence au déploiement';
+  $('ctListe').innerHTML=ctListe.length?ctListe.map(c=>{
+    const bots=Object.keys(c.bots||{}).map(b=>'…'+esc(b.slice(-4))).join(', ');
+    return '<div class="ctc"><div class="ci"><div class="cn">'+(c.nom?esc(c.nom):'<span style="color:var(--mut)">Sans nom</span>')+'</div><div class="cp">+'+esc(c.numero)+'</div>'
+      +'<div class="cm">'+c.recus+' reçu'+(c.recus>1?'s':'')+' · '+c.envoyes+' envoyé'+(c.envoyes>1?'s':'')+' · vu '+tempsRel(c.dernier)+(c.groupe&&!c.prive?' · via groupe':'')+(bots?' · bot '+bots:'')+'</div></div>'
+      +'<div class="ca"><button data-cp="'+esc(c.numero)+'" type="button">📋 Copier</button><a href="https://wa.me/'+esc(c.numero)+'" target="_blank" rel="noopener">💬 Ouvrir</a><button class="sup" data-sup="'+esc(c.numero)+'" type="button">🗑</button></div></div>';
+  }).join(''):'<div class="vide">Aucun numéro capturé pour le moment. Ils apparaissent dès qu\'une personne écrit au bot ou qu\'il lui répond.</div>';
+}
+function ouvrirContacts(){
+  $('liste').style.display='none';$('contacts').style.display='block';scrollTo(0,0);
+  chargerContacts();clearInterval(ctTimer);ctTimer=setInterval(()=>{if(document.visibilityState==='visible')chargerContacts()},15000);
+}
+function fermerContacts(){clearInterval(ctTimer);$('contacts').style.display='none';$('liste').style.display='block';scrollTo(0,0)}
+$('ctBtn').onclick=ouvrirContacts;
+$('toutSup').onclick=async()=>{
+  if(!confirm('Supprimer TOUS les messages de TOUS les bots, avec leurs photos et vocaux, ainsi que TOUS les numéros enregistrés ?\n\nCette action est définitive.'))return;
+  const b=$('toutSup');b.disabled=true;
+  try{
+    const{r,d}=await api('/api/admin/messages/tout-supprimer',{contacts:true});
+    if(!r.ok){toast(d.erreur||'Échec de la suppression');return}
+    vus.clear();sauverVus();libererBlobs();dernKeys=new Set();derSig='';$('mlist').innerHTML='';
+    toast(d.messages+' message(s) et '+d.numeros+' numéro(s) supprimés');
+    charger();
+  }catch(_){toast('Erreur réseau')}finally{b.disabled=false}
+};
+$('ctRetour').onclick=fermerContacts;
+$('ctq').oninput=()=>{clearTimeout(ctRech);ctRech=setTimeout(chargerContacts,250)};
+$('ctbot').onchange=chargerContacts;
+$('ctListe').onclick=async e=>{
+  const cp=e.target.closest('[data-cp]'),sup=e.target.closest('[data-sup]');
+  if(cp){const n='+'+cp.dataset.cp;try{await navigator.clipboard.writeText(n);toast('Numéro copié : '+n)}catch(_){toast(n)}}
+  if(sup&&confirm('Retirer +'+sup.dataset.sup+' de la liste ?')){const{r,d}=await api('/api/admin/contacts/supprimer',{numero:sup.dataset.sup});toast(r.ok?'Contact retiré':(d.erreur||'Échec'));chargerContacts()}
+};
+$('ctVider').onclick=async()=>{
+  if(!confirm('Effacer TOUS les numéros enregistrés ? Cette action est définitive.'))return;
+  const{r,d}=await api('/api/admin/contacts/vider');toast(r.ok?d.supprimes+' contact(s) effacé(s)':(d.erreur||'Échec'));chargerContacts()
+};
+$('ctCsv').onclick=()=>{
+  if(!ctListe.length){toast('Rien à exporter');return}
+  const cel=v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"';
+  const lignes=['numero,nom,premier_contact,dernier_contact,recus,envoyes,bots'].concat(ctListe.map(c=>[c.numero,c.nom,new Date(c.premier).toISOString(),new Date(c.dernier).toISOString(),c.recus,c.envoyes,Object.keys(c.bots||{}).join(' ')].map(cel).join(',')));
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\ufeff'+lignes.join('\n')],{type:'text/csv;charset=utf-8'}));a.download='contacts-leybotdy.csv';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),4000);
+};
 $('retour').onclick=fermerMsgs;
 $('chips').onclick=e=>{const b=e.target.dataset&&e.target.dataset.b;if(b===undefined)return;
   if(b==='')msgNums=[];else msgNums=msgNums.includes(b)?msgNums.filter(x=>x!==b):[...msgNums,b];rendreChips();chargerMsgs()};
