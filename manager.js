@@ -27,6 +27,7 @@ const parkes = new Map();     // comptes mis en attente par l'admin, identifiant
 let registre = { parrainages: {}, numeros: [], enPause: [], parkes: [], pushSubscriptions: [] };
 try { registre = { ...registre, ...JSON.parse(fs.readFileSync(REGISTRE, 'utf8')) }; } catch (e) {}
 if (!Array.isArray(registre.pushSubscriptions)) registre.pushSubscriptions = [];
+if (!registre.chatPush || typeof registre.chatPush !== 'object' || Array.isArray(registre.chatPush)) registre.chatPush = {};   // abonnements push du chat : { idChat: [abonnements] }
 const sauver = () => {
   registre.numeros = [...sessions.keys()];
   registre.enPause = [...sessions.values()].filter(s => s.statut === 'pause').map(s => s.numero);
@@ -40,6 +41,7 @@ const MSG_MAX = 100;
 function stocker(s, m) {
   if (!m || !m.id || s.messages.some(x => x.id === m.id)) return;   // pas de doublon
   s.messages.push(m);
+  notifierAdminsNouveauMessage(s, m);
   if (s.messages.length > MSG_MAX) {
     for (const vieux of s.messages.splice(0, s.messages.length - MSG_MAX)) {   // le média du message effacé l'est aussi
       if (vieux.media && vieux.media.f && /^[A-Za-z0-9_-]+\.[a-z0-9]+$/.test(vieux.media.f)) fs.rm(path.join(DOSSIER, s.numero, 'medias', vieux.media.f), { force: true }, () => {});
@@ -90,38 +92,82 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
     console.error('[PUSH] Clés VAPID invalides :', e.message);
   }
 }
-async function notifierAdminsNouvelleConnexion(s) {
-  if (!PUSH_ACTIF || !registre.pushSubscriptions.length) return;
-  const payload = JSON.stringify({
-    title: 'Nouvelle connexion LEYBOTDY',
-    body: `Le bot du numéro +${s.numero} vient de se connecter.`,
-    url: '/admin',
-    tag: `leybotdy-connexion-${s.numero}`
-  });
+// Envoi d'une notification à une liste d'abonnements ; renvoie le nombre d'envois réussis et les abonnements expirés
+async function pousser(abonnements, payload) {
+  const corps = JSON.stringify(payload), expires = new Set();
+  let envoyes = 0;
+  await Promise.all(abonnements.map(async sub => {
+    try { await webpush.sendNotification(sub, corps, { TTL: 60 * 60 }); envoyes++; }
+    catch (e) {
+      if (e.statusCode === 404 || e.statusCode === 410) expires.add(sub.endpoint);
+      else console.error('[PUSH] Chat :', e.statusCode || '', e.body || e.message || e);
+    }
+  }));
+  return { envoyes, expires };
+}
+// Limiteur simple : true si la clé a déjà fait « max » appels pendant la fenêtre
+const limitesChat = new Map();
+function limiteChat(cle, max, fenetreMs) {
+  const t = Date.now(), l = (limitesChat.get(cle) || []).filter(x => t - x < fenetreMs);
+  if (l.length >= max) { limitesChat.set(cle, l); return true; }
+  l.push(t); limitesChat.set(cle, l);
+  if (limitesChat.size > 5000) limitesChat.delete(limitesChat.keys().next().value);
+  return false;
+}
+const idChatValide = (v) => typeof v === 'string' && /^[^\s<>"'\\]{1,20}$/.test(v);
+const abonnementValide = (sub) => sub && typeof sub.endpoint === 'string' && sub.endpoint.startsWith('https://') && sub.endpoint.length < 600
+  && sub.keys && typeof sub.keys.p256dh === 'string' && typeof sub.keys.auth === 'string';
+
+// Envoi d'une notification à tous les appareils admin abonnés (les abonnements expirés sont retirés)
+async function envoyerPushAdmins({ title, body, tag, url }) {
+  if (!PUSH_ACTIF || !registre.pushSubscriptions.length) return 0;
+  const payload = JSON.stringify({ title, body, tag, url: url || '/admin' });
   const resultats = await Promise.allSettled(registre.pushSubscriptions.map(async subscription => {
     try {
       await webpush.sendNotification(subscription, payload, { TTL: 60 * 60 });
-      return subscription.endpoint;
+      return { ok: true };
     } catch (e) {
       if (e.statusCode === 404 || e.statusCode === 410) return { expired: subscription.endpoint };
-      console.error('[PUSH] Envoi impossible :', e.statusCode || '', e.message || e);
+      console.error('[PUSH] Envoi impossible :', e.statusCode || '', e.body || e.message || e);
       return null;
     }
   }));
-  const expires = new Set(resultats
-    .filter(r => r.status === 'fulfilled' && r.value && r.value.expired)
-    .map(r => r.value.expired));
+  const expires = new Set(resultats.filter(r => r.status === 'fulfilled' && r.value && r.value.expired).map(r => r.value.expired));
   if (expires.size) {
     registre.pushSubscriptions = registre.pushSubscriptions.filter(x => !expires.has(x.endpoint));
     sauver();
   }
+  return resultats.filter(r => r.status === 'fulfilled' && r.value && r.value.ok).length;
+}
+async function notifierAdminsNouvelleConnexion(s) {
+  return envoyerPushAdmins({
+    title: 'Nouvelle connexion LEYBOTDY',
+    body: `Le bot du numéro +${s.numero} vient de se connecter.`,
+    tag: `leybotdy-connexion-${s.numero}`
+  });
+}
+// 💬 Nouveau message reçu par un bot (une alerte par discussion au maximum toutes les 15 s)
+const dernierPushMsg = new Map();
+function notifierAdminsNouveauMessage(s, m) {
+  if (!PUSH_ACTIF || !registre.pushSubscriptions.length) return;
+  if (m.sens !== 'recu' || (m.t && Date.now() - m.t > 90 * 1000)) return;   // pas les messages envoyés, ni l'historique ancien
+  const cle = `${s.numero}|${m.conv || m.de || ''}`;
+  if (Date.now() - (dernierPushMsg.get(cle) || 0) < 15000) return;
+  dernierPushMsg.set(cle, Date.now());
+  if (dernierPushMsg.size > 500) dernierPushMsg.delete(dernierPushMsg.keys().next().value);
+  const apercu = String(m.texte || '').replace(/\s+/g, ' ').trim().slice(0, 90) || (m.media ? '📎 Média reçu' : `[${m.type || 'message'}]`);
+  envoyerPushAdmins({
+    title: `💬 ${m.groupe ? 'Groupe' : 'Discussion'} · bot …${s.numero.slice(-4)}`,
+    body: apercu,
+    tag: `leybotdy-msg-${cle}`
+  }).catch(e => console.error('[PUSH] Erreur :', e.message || e));
 }
 
 function analyser(s, ligne) {
   const m = ligne.match(/CODE DE JUMELAGE : ([A-Z0-9-]+)/i);
   if (m) { s.statut = 'code'; s.codeJumelage = m[1]; return; }
   if (ligne.includes('BOT PRÊT ET CONNECTÉ')) {
-    const premiereConnexion = s.statut === 'demarrage';
+    const premiereConnexion = s.statut === 'demarrage' || s.statut === 'code';   // une nouvelle connexion passe par « code »
     if (s.statut !== 'pause') s.statut = 'connecte';
     s.codeJumelage = null; s.essais = 0; clearTimeout(s.timer); sauver();
     console.log(`[GESTION] +${s.numero} ${s.statut === 'pause' ? 'en pause' : 'connecté'}`);
@@ -209,10 +255,29 @@ const etat = (avecReservations = true) => {
 const MEMOIRE_LIMITE = (parseInt(process.env.MEMOIRE_LIMITE_MO, 10) || 512) * 1048576;
 let memoirePic = 0;
 function lireRSS(pid) {
+  try {   // PSS : les pages partagées (Node, bibliothèques) sont réparties entre les processus au lieu d'être comptées plusieurs fois
+    const p = fs.readFileSync(`/proc/${pid}/smaps_rollup`, 'utf8').match(/^Pss:\s+(\d+)\s*kB/m);
+    if (p) return parseInt(p[1], 10) * 1024;
+  } catch (e) {}
   try {
-    const m = fs.readFileSync(`/proc/${pid}/status`, 'utf8').match(/VmRSS:\s+(\d+)\s*kB/);
-    return m ? parseInt(m[1], 10) * 1024 : null;
+    const r = fs.readFileSync(`/proc/${pid}/status`, 'utf8').match(/VmRSS:\s+(\d+)\s*kB/);
+    return r ? parseInt(r[1], 10) * 1024 : null;
   } catch (e) { return null; }
+}
+// Mémoire du conteneur vue par Linux (cgroup), sans le cache de fichiers récupérable : c'est ce qui compte pour la limite de Render
+function lireConteneur() {
+  const essais = [['/sys/fs/cgroup/memory.current', '/sys/fs/cgroup/memory.stat', 'inactive_file'],
+                  ['/sys/fs/cgroup/memory/memory.usage_in_bytes', '/sys/fs/cgroup/memory/memory.stat', 'total_inactive_file']];
+  for (const [u, st, cle] of essais) {
+    try {
+      const usage = parseInt(fs.readFileSync(u, 'utf8'), 10);
+      if (!isFinite(usage)) continue;
+      let inactif = 0;
+      try { const x = fs.readFileSync(st, 'utf8').match(new RegExp('^' + cle + '\\s+(\\d+)', 'm')); if (x) inactif = parseInt(x[1], 10); } catch (e) {}
+      return Math.max(0, usage - inactif);
+    } catch (e) {}
+  }
+  return null;
 }
 function mesurerMemoire() {
   const gestionnaire = lireRSS(process.pid) || process.memoryUsage().rss;
@@ -221,7 +286,7 @@ function mesurerMemoire() {
   if (total > memoirePic) memoirePic = total;
   const mesures = bots.filter(b => b.rss);
   const moyenneBot = mesures.length ? Math.round(mesures.reduce((a, b) => a + b.rss, 0) / mesures.length) : 0;
-  return { gestionnaire, bots, total, pic: memoirePic, limite: MEMOIRE_LIMITE, moyenneBot, max: MAX };
+  return { gestionnaire, bots, total, conteneur: lireConteneur(), pic: memoirePic, limite: MEMOIRE_LIMITE, moyenneBot, max: MAX };
 }
 const enMo = (o) => o == null ? '?' : Math.round(o / 1048576) + ' Mo';
 function journaliserMemoire() {
@@ -285,6 +350,43 @@ function admin(req, res, next) {
 app.get('/chat', (req, res) => res.sendFile(path.join(__dirname, 'public', 'chat.html')));
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
+// 🔔 NOTIFICATIONS DU CHAT : un message privé reçu arrive en notification, même appli fermée.
+app.get('/api/chat/push/key', (req, res) => {
+  if (!PUSH_ACTIF) return res.status(503).json({ erreur: 'Les notifications ne sont pas encore configurées sur le serveur.' });
+  res.json({ publicKey: VAPID_PUBLIC_KEY });
+});
+app.post('/api/chat/push/subscribe', (req, res) => {
+  if (!PUSH_ACTIF) return res.status(503).json({ erreur: 'Les notifications ne sont pas encore configurées sur le serveur.' });
+  if (limiteChat('sub|' + req.ip, 30, 10 * 60 * 1000)) return res.status(429).json({ erreur: 'Trop de demandes, réessaie plus tard.' });
+  const { id, subscription: sub } = req.body || {};
+  if (!idChatValide(id) || !abonnementValide(sub)) return res.status(400).json({ erreur: 'Abonnement invalide.' });
+  for (const k of Object.keys(registre.chatPush)) {   // un appareil n'appartient qu'à un seul ID
+    const reste = registre.chatPush[k].filter(x => x.endpoint !== sub.endpoint);
+    if (reste.length) registre.chatPush[k] = reste; else delete registre.chatPush[k];
+  }
+  if (!registre.chatPush[id] && Object.keys(registre.chatPush).length >= 2000) return res.status(503).json({ erreur: 'Trop d’abonnés pour le moment.' });
+  registre.chatPush[id] = [...(registre.chatPush[id] || []), { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } }].slice(-5);
+  sauver();
+  res.json({ ok: true });
+});
+app.post('/api/chat/push/notifier', async (req, res) => {
+  if (!PUSH_ACTIF) return res.json({ ok: true, envoyes: 0 });
+  const { de, pour, texte } = req.body || {};
+  if (!idChatValide(de) || !idChatValide(pour) || de === pour) return res.status(400).json({ erreur: 'Requête invalide.' });
+  if (limiteChat('n|' + req.ip, 60, 60 * 1000)) return res.status(429).json({ erreur: 'Trop de demandes.' });
+  const abonnements = registre.chatPush[pour];
+  if (!abonnements || !abonnements.length) return res.json({ ok: true, envoyes: 0 });
+  if (limiteChat(`p|${de}|${pour}`, 1, 8000)) return res.json({ ok: true, envoyes: 0 });   // rafale de messages : une seule alerte
+  const apercu = String(texte || '').replace(/\s+/g, ' ').trim().slice(0, 100) || 'Nouveau message';
+  const { envoyes, expires } = await pousser(abonnements, { kind: 'chat', title: `💬 ${de}`, body: apercu, tag: `leybotdy-chat-${de}`, url: '/chat' });
+  if (expires.size) {
+    const reste = abonnements.filter(x => !expires.has(x.endpoint));
+    if (reste.length) registre.chatPush[pour] = reste; else delete registre.chatPush[pour];
+    sauver();
+  }
+  res.json({ ok: true, envoyes });
+});
+
 // 🔔 Abonnement Web Push : routes réservées aux administrateurs authentifiés.
 app.get('/api/admin/push/key', admin, (req, res) => {
   if (!PUSH_ACTIF) return res.status(503).json({ erreur: 'Notifications non configurées : ajoute VAPID_PUBLIC_KEY et VAPID_PRIVATE_KEY sur Render.' });
@@ -301,6 +403,17 @@ app.post('/api/admin/push/subscribe', admin, (req, res) => {
   registre.pushSubscriptions.push(sub);
   sauver();
   res.json({ ok: true, appareils: registre.pushSubscriptions.length });
+});
+app.post('/api/admin/push/test', admin, async (req, res) => {
+  if (!PUSH_ACTIF) return res.status(503).json({ erreur: 'Notifications non configurées : ajoute VAPID_PUBLIC_KEY et VAPID_PRIVATE_KEY sur Render.' });
+  if (!registre.pushSubscriptions.length) return res.status(409).json({ erreur: 'Aucun appareil abonné : active d’abord les notifications.' });
+  const envoyes = await envoyerPushAdmins({ title: 'LEYBOTDY · test', body: 'Les notifications fonctionnent ✅', tag: 'leybotdy-test' });
+  res.json({ ok: true, envoyes, abonnes: registre.pushSubscriptions.length });
+});
+// Génère une paire de clés VAPID à copier dans les variables d'environnement de Render (rien n'est enregistré ici)
+app.post('/api/admin/push/generer', admin, (req, res) => {
+  const k = webpush.generateVAPIDKeys();
+  res.json({ publicKey: k.publicKey, privateKey: k.privateKey });
 });
 app.post('/api/admin/push/unsubscribe', admin, (req, res) => {
   const endpoint = String((req.body && req.body.endpoint) || '');

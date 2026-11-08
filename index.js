@@ -337,28 +337,49 @@ const demandesYasmine = new Map(); // chat|expéditeur -> expiration du code (60
 const COOLDOWN_COMMANDE_MS = 2500;
 const dernieresCommandes = new Map();
 
-// 🖼️ Images des menus (fichier menu-images.js : 4 images en base64)
+// 🖼️ Images et 🎬 vidéos des menus : on ne garde AUCUN média en mémoire.
+// On retient seulement les chemins des fichiers ; le contenu est lu au moment de l'envoi puis libéré.
+
+// Images (fichier menu-images.js : images en base64) : au démarrage on les écrit une fois sur disque,
+// puis on retire le module du cache de Node pour libérer toutes ces chaînes base64.
 const MENU_IMAGES = (() => {
   try {
-    return require('./menu-images').map(b => Buffer.from(b, 'base64'));
+    const dossier = path.join(require('os').tmpdir(), 'menu-img');
+    fs.mkdirSync(dossier, { recursive: true });
+    const module_ = require.resolve('./menu-images');
+    const fichiers = require('./menu-images').map((b64, i) => {
+      const f = path.join(dossier, `menu-${i + 1}.img`);
+      fs.writeFileSync(f, Buffer.from(b64, 'base64'));
+      return f;
+    });
+    delete require.cache[module_];
+    return fichiers;
   } catch (e) {
-    console.error('⚠️ menu-images.js introuvable : les menus seront envoyés sans image.');
+    console.error('⚠️ menu-images.js introuvable ou illisible : les menus seront envoyés sans image.', e && e.message);
     return [];
   }
 })();
 
-// 🎬 Vidéos du menu (optionnelles) : media/menu.mp4, media/menu2.mp4, media/menu3.mp4 … (jusqu'à menu10.mp4)
+// Vidéos du menu (optionnelles) : media/menu.mp4, media/menu2.mp4 … menu10.mp4
 // Le bot en choisit une au hasard à chaque menu d'accueil (jamais deux fois la même d'affilée).
 const MENU_VIDEOS = (() => {
   const liste = [];
   for (const nom of ['menu.mp4', ...Array.from({ length: 9 }, (_, i) => `menu${i + 2}.mp4`)]) {
     try {
       const chemin = path.join(__dirname, 'media', nom);
-      if (fs.existsSync(chemin)) liste.push(fs.readFileSync(chemin));
+      if (fs.existsSync(chemin)) liste.push(chemin);
     } catch (e) { /* fichier illisible : ignoré */ }
   }
   return liste;
 })();
+// Chemin d'un fichier du dossier media/ (ou null s'il n'existe pas) : on ne charge jamais le contenu au démarrage
+function cheminMedia(nom) {
+  try { const c = path.join(__dirname, 'media', nom); return fs.existsSync(c) ? c : null; } catch (e) { return null; }
+}
+// Lecture du fichier au dernier moment ; le Buffer est libéré dès que l'envoi est terminé
+async function lireMediaMenu(chemin) {
+  try { return await fs.promises.readFile(chemin); } catch (e) { return null; }
+}
 let dernierIndexVideoMenu = -1;
 function choisirVideoMenu() {
   if (!MENU_VIDEOS.length) return null;
@@ -635,13 +656,51 @@ async function telechargerMedia(sock, media, type, cleMsg) {
   throw derniere;
 }
 
-function memoriserVueUnique(idMsg, chatJid, objet) {
+// 💾 Les vues uniques sont gardées sur le DISQUE du serveur (dossier temporaire), pas dans la mémoire du bot.
+// On ne retient en mémoire que les infos (type, expéditeur, date…) et le chemin du fichier.
+const VU_DIR = path.join(require('os').tmpdir(), `vue-unique-${process.pid}`);
+(function nettoyerAnciennesVuesUniques() {   // restes d'un ancien démarrage (de plus de 6 h)
+  try {
+    const racine = require('os').tmpdir();
+    for (const nom of fs.readdirSync(racine)) {
+      if (!nom.startsWith('vue-unique-') || nom === path.basename(VU_DIR)) continue;
+      const dossier = path.join(racine, nom);
+      if (Date.now() - fs.statSync(dossier).mtimeMs > 6 * 3600 * 1000) fs.rmSync(dossier, { recursive: true, force: true });
+    }
+  } catch (e) { /* sans importance */ }
+})();
+process.on('exit', () => { try { fs.rmSync(VU_DIR, { recursive: true, force: true }); } catch (e) {} });
+
+function supprimerFichierVue(objet) {
+  if (objet && objet.fichier) fs.rm(objet.fichier, { force: true }, () => {});
+}
+// Contenu du média : lu depuis le disque au moment de l'envoi, libéré ensuite
+async function tamponVue(cache) {
+  if (cache.buffer) return cache.buffer;
+  return fs.promises.readFile(cache.fichier);
+}
+
+async function memoriserVueUnique(idMsg, chatJid, objet) {
   if (!idMsg) return;
+  if (objet.buffer) {
+    try {
+      await fs.promises.mkdir(VU_DIR, { recursive: true });
+      const f = path.join(VU_DIR, `${String(idMsg).replace(/[^A-Za-z0-9_-]/g, '_')}-${Date.now()}`);
+      await fs.promises.writeFile(f, objet.buffer);
+      objet.fichier = f;
+      objet.buffer = null;                         // plus rien en mémoire
+    } catch (e) { /* disque indisponible : on garde en mémoire, comme avant */ }
+  }
+  supprimerFichierVue(vueUniqueCache[idMsg]);
   vueUniqueCache[idMsg] = objet;
   vueUniqueCache['dernier:' + chatJid] = idMsg;
+  const deja = vuOrdre.indexOf(idMsg);
+  if (deja >= 0) vuOrdre.splice(deja, 1);
   vuOrdre.push(idMsg);
   while (vuOrdre.length > VU_MAX_CACHE) {
-    delete vueUniqueCache[vuOrdre.shift()];
+    const vieux = vuOrdre.shift();
+    supprimerFichierVue(vueUniqueCache[vieux]);
+    delete vueUniqueCache[vieux];
   }
 }
 
@@ -651,16 +710,17 @@ function lireTimestamp(t) {
 }
 
 // Contenu Baileys selon le type (un vocal n'a pas de légende : on envoie le texte à part)
-function contenuMedia(cache, texte) {
+function contenuMedia(cache, texte, tampon = cache.buffer) {
   const mentions = cache.expediteur ? [cache.expediteur] : [];
-  if (cache.type === 'video') return { video: cache.buffer, caption: texte, mimetype: cache.mimetype || 'video/mp4', mentions };
-  if (cache.type === 'audio') return { audio: cache.buffer, mimetype: cache.mimetype || 'audio/ogg; codecs=opus', ptt: cache.ptt !== false };
-  return { image: cache.buffer, caption: texte, mentions };
+  if (cache.type === 'video') return { video: tampon, caption: texte, mimetype: cache.mimetype || 'video/mp4', mentions };
+  if (cache.type === 'audio') return { audio: tampon, mimetype: cache.mimetype || 'audio/ogg; codecs=opus', ptt: cache.ptt !== false };
+  return { image: tampon, caption: texte, mentions };
 }
 
 async function envoyerMediaCache(sock, cible, cache, texte, options = {}) {
   // Image et vidéo : la légende fait partie du média. Vocal : pas de légende possible, il part seul.
-  const res = await sock.sendMessage(cible, contenuMedia(cache, texte), cache.type === 'audio' ? {} : options);
+  const tampon = await tamponVue(cache);
+  const res = await sock.sendMessage(cible, contenuMedia(cache, texte, tampon), cache.type === 'audio' ? {} : options);
   if (res && res.key && res.key.id) processedMessages.add(res.key.id);
   return res;
 }
@@ -704,7 +764,7 @@ async function traiterVueUnique(sock, msg) {
 
   const fdate = new Date(lireTimestamp(msg.messageTimestamp)).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'medium' });
   const cache = { buffer, type: a.type, mimetype: a.media.mimetype, ptt: a.media.ptt, caption: a.media.caption || '', fdate, expediteur };
-  memoriserVueUnique(idMsg, chatJid, cache);
+  await memoriserVueUnique(idMsg, chatJid, cache);
   if (!VU_AUTO) return;
 
   const nom = profilsJoueurs[expediteur] || `@${expediteur.split('@')[0]}`;
@@ -740,7 +800,7 @@ async function commandeVueUnique(sock, msg, remoteJid) {
       try {
         const buffer = await telechargerMedia(sock, a.media, a.type, { remoteJid, id: idCite, participant: ctx.participant, fromMe: false });
         cache = { buffer, type: a.type, mimetype: a.media.mimetype, ptt: a.media.ptt, caption: a.media.caption || '', fdate: null, expediteur: ctx.participant || null };
-        memoriserVueUnique(idCite, remoteJid, cache);
+        await memoriserVueUnique(idCite, remoteJid, cache);
       } catch (e) {
         console.error(`[VU] ❌ .v : téléchargement du média cité impossible : ${e && e.message ? e.message : e}`);
       }
@@ -760,10 +820,12 @@ async function commandeVueUnique(sock, msg, remoteJid) {
   const nom = cache.expediteur ? (profilsJoueurs[cache.expediteur] || `@${cache.expediteur.split('@')[0]}`) : null;
   const texte = `🔓 *VUE UNIQUE RÉCUPÉRÉE* 🥷${nom ? `\n👤 *Envoyée par :* ${nom}` : ''}`;
   // Un vocal ne peut pas avoir de légende : il part seul, sans message texte séparé
+  let tampon;
+  try { tampon = await tamponVue(cache); } catch (e) { await repondre("⚠️ Ce média n'est plus disponible (le bot a redémarré)."); return; }
   if (cache.type === 'audio') {
-    await envoyerAvecDelai(sock, remoteJid, contenuMedia(cache, texte), {}, 'media');
+    await envoyerAvecDelai(sock, remoteJid, contenuMedia(cache, texte, tampon), {}, 'media');
   } else {
-    await envoyerAvecDelai(sock, remoteJid, contenuMedia(cache, texte), { quoted: msg }, 'media');
+    await envoyerAvecDelai(sock, remoteJid, contenuMedia(cache, texte, tampon), { quoted: msg }, 'media');
   }
 }
 
@@ -852,7 +914,7 @@ async function envoyerFichierEnVocal(sock, msg, remoteJid, nomFichier) {
     vocalPath = await convertirEnVocalOpus(chemin);
     AUDIO_VOCAL_CACHE.set(nomFichier, vocalPath);
   }
-  const buffer = fs.readFileSync(vocalPath);
+  const buffer = await fs.promises.readFile(vocalPath);   // lu à l'envoi seulement, libéré ensuite
   await envoyerAvecDelai(sock, remoteJid, {
     audio: buffer,
     mimetype: 'audio/ogg; codecs=opus',
@@ -1253,15 +1315,11 @@ async function gererReponseMariage(sock, remoteJid, senderJid, lowerText) {
 }
 
 // 🖼️ .routine → l'image de la routine (media/routine.jpg)
-const ROUTINE_IMAGE = (() => {
-  try {
-    const chemin = path.join(__dirname, 'media', 'routine.jpg');
-    return fs.existsSync(chemin) ? fs.readFileSync(chemin) : null;
-  } catch (e) { return null; }
-})();
+const ROUTINE_IMAGE = cheminMedia('routine.jpg');   // chemin du fichier (jamais le contenu : lu à l'envoi puis libéré)
 async function commandeRoutine(sock, msg, remoteJid) {
   const texte = "Voilà la routine de mon créateur 🤣😂😂";
-  if (ROUTINE_IMAGE) return envoyerAvecDelai(sock, remoteJid, { image: ROUTINE_IMAGE, caption: texte }, { quoted: msg }, 'media');
+  const img = ROUTINE_IMAGE ? await lireMediaMenu(ROUTINE_IMAGE) : null;
+  if (img) return envoyerAvecDelai(sock, remoteJid, { image: img, caption: texte }, { quoted: msg }, 'media');
   return envoyerAvecDelai(sock, remoteJid, { text: texte }, { quoted: msg }, 'texte');
 }
 
@@ -1608,12 +1666,14 @@ function construireMenu(texte, nom, jid) {
 async function envoyerMenu(sock, remoteJid, msg, resultat) {
   let media = null;
   if (typeof resultat.cat === 'number') {
-    const img = choisirImageMenu(resultat.cat);
+    const img = await lireMediaMenu(choisirImageMenu(resultat.cat));
     if (img) media = { type: 'image', buffer: img };
   } else if (MENU_VIDEOS.length) {
-    media = { type: 'video', buffer: choisirVideoMenu() };
+    const vid = await lireMediaMenu(choisirVideoMenu());
+    if (vid) media = { type: 'video', buffer: vid };
   } else if (MENU_IMAGES.length) {
-    media = { type: 'image', buffer: alea(MENU_IMAGES) };
+    const img = await lireMediaMenu(alea(MENU_IMAGES));
+    if (img) media = { type: 'image', buffer: img };
   }
   if (!media) return envoyerAvecDelai(sock, remoteJid, { text: resultat.texte }, { quoted: msg }, 'menu');
 
@@ -2363,27 +2423,12 @@ async function commandeIA(sock, msg, remoteJid, cleanText, senderJid, isGroup) {
 // 🎈 ═══════════════════════════════════════════════════════════
 // 🎈 GUMBALL DU JOUR (commande .gumball, groupe & privé)
 // ═══════════════════════════════════════════════════════════
-const GUMBALL_IMAGE = (() => {
-  try {
-    const chemin = path.join(__dirname, 'media', 'gumball.jpg');
-    return fs.existsSync(chemin) ? fs.readFileSync(chemin) : null;
-  } catch (e) { return null; }
-})();
+const GUMBALL_IMAGE = cheminMedia('gumball.jpg');   // chemin du fichier, lu seulement à l'envoi
 // 🎬 Vidéo de la commande .guerre (fichier media/guerre.mp4)
-const GUERRE_VIDEO = (() => {
-  try {
-    const chemin = path.join(__dirname, 'media', 'guerre.mp4');
-    return fs.existsSync(chemin) ? fs.readFileSync(chemin) : null;
-  } catch (e) { return null; }
-})();
+const GUERRE_VIDEO = cheminMedia('guerre.mp4');   // chemin du fichier, lu seulement à l'envoi
 
 // 🎬 Vidéo spéciale « Yasmine » (fichier media/yasmine.mp4)
-const YASMINE_VIDEO = (() => {
-  try {
-    const chemin = path.join(__dirname, 'media', 'yasmine.mp4');
-    return fs.existsSync(chemin) ? fs.readFileSync(chemin) : null;
-  } catch (e) { return null; }
-})();
+const YASMINE_VIDEO = cheminMedia('yasmine.mp4');   // chemin du fichier, lu seulement à l'envoi
 
 // 🎈 Commentaire selon le Gumball choisi (1 à 16) : d'après l'expression du tableau
 const COMMENTAIRES_GUMBALL = {
@@ -2410,7 +2455,8 @@ const cleGumball = (remoteJid, acteur) => `${remoteJid}|${acteur}`;
 
 async function commandeGumball(sock, msg, remoteJid, acteur) {
   const texte = "Sélectionne ton Gumball d'aujourd'hui 👇\nRéponds avec son numéro (1 à 16) 😜";
-  const contenu = GUMBALL_IMAGE ? { image: GUMBALL_IMAGE, caption: texte } : { text: texte };
+  const img = GUMBALL_IMAGE ? await lireMediaMenu(GUMBALL_IMAGE) : null;
+  const contenu = img ? { image: img, caption: texte } : { text: texte };
   await envoyerAvecDelai(sock, remoteJid, contenu, { quoted: msg }, 'media');
   gumballEnAttente.set(cleGumball(remoteJid, acteur), Date.now() + 10 * 60 * 1000);
 }
@@ -3268,10 +3314,11 @@ async function startBot() {
       }
 
       if (lowerText.trim() === '.guerre') {
-        if (!GUERRE_VIDEO) {
+        const videoGuerre = GUERRE_VIDEO ? await lireMediaMenu(GUERRE_VIDEO) : null;
+        if (!videoGuerre) {
           await envoyerAvecDelai(sock, remoteJid, { text: "⚠️ Vidéo introuvable. Ajoute le fichier `media/guerre.mp4` au dépôt GitHub puis redéploie le bot." }, { quoted: msg }, 'texte');
         } else {
-          await envoyerAvecDelai(sock, remoteJid, { video: GUERRE_VIDEO, mimetype: 'video/mp4', caption: '🎬 *Guerre*' }, { quoted: msg }, 'media');
+          await envoyerAvecDelai(sock, remoteJid, { video: videoGuerre, mimetype: 'video/mp4', caption: '🎬 *Guerre*' }, { quoted: msg }, 'media');
         }
         return;
       }
@@ -3283,8 +3330,9 @@ async function startBot() {
       if (attenteYasmine && attenteYasmine.expire >= Date.now()) {
         demandesYasmine.delete(cleYasmine);
         if (CODE_YASMINE && cleanText.trim() === CODE_YASMINE) {
-          if (YASMINE_VIDEO) {
-            await envoyerAvecDelai(sock, remoteJid, { video: YASMINE_VIDEO, mimetype: 'video/mp4', caption: '🎬 *Yasmine* 💅', viewOnce: true }, { quoted: msg }, 'media');
+          const videoYasmine = YASMINE_VIDEO ? await lireMediaMenu(YASMINE_VIDEO) : null;
+          if (videoYasmine) {
+            await envoyerAvecDelai(sock, remoteJid, { video: videoYasmine, mimetype: 'video/mp4', caption: '🎬 *Yasmine* 💅', viewOnce: true }, { quoted: msg }, 'media');
           } else {
             await envoyerAvecDelai(sock, remoteJid, { text: "⚠️ Vidéo Yasmine introuvable. Vérifie media/yasmine.mp4." }, { quoted: msg }, 'texte');
           }
