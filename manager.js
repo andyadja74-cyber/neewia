@@ -97,7 +97,7 @@ async function pousser(abonnements, payload) {
   const corps = JSON.stringify(payload), expires = new Set();
   let envoyes = 0;
   await Promise.all(abonnements.map(async sub => {
-    try { await webpush.sendNotification(sub, corps, { TTL: 60 * 60 }); envoyes++; }
+    try { await webpush.sendNotification(sub, corps, { TTL: 60 * 60, urgency: 'high' }); envoyes++; }
     catch (e) {
       if (e.statusCode === 404 || e.statusCode === 410) expires.add(sub.endpoint);
       else console.error('[PUSH] Chat :', e.statusCode || '', e.body || e.message || e);
@@ -124,7 +124,7 @@ async function envoyerPushAdmins({ title, body, tag, url }) {
   const payload = JSON.stringify({ title, body, tag, url: url || '/admin' });
   const resultats = await Promise.allSettled(registre.pushSubscriptions.map(async subscription => {
     try {
-      await webpush.sendNotification(subscription, payload, { TTL: 60 * 60 });
+      await webpush.sendNotification(subscription, payload, { TTL: 60 * 60, urgency: 'high' });
       return { ok: true };
     } catch (e) {
       if (e.statusCode === 404 || e.statusCode === 410) return { expired: subscription.endpoint };
@@ -368,6 +368,22 @@ app.post('/api/chat/push/subscribe', (req, res) => {
   registre.chatPush[id] = [...(registre.chatPush[id] || []), { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } }].slice(-5);
   sauver();
   res.json({ ok: true });
+});
+// Test : envoie une notification aux appareils enregistrés sous cet ID et dit combien il y en a
+app.post('/api/chat/push/test', async (req, res) => {
+  if (!PUSH_ACTIF) return res.status(503).json({ erreur: 'Les notifications ne sont pas encore configurées sur le serveur.' });
+  if (limiteChat('t|' + req.ip, 5, 60 * 1000)) return res.status(429).json({ erreur: 'Trop de tests, réessaie dans une minute.' });
+  const { id } = req.body || {};
+  if (!idChatValide(id)) return res.status(400).json({ erreur: 'ID invalide.' });
+  const abonnements = registre.chatPush[id] || [];
+  if (!abonnements.length) return res.json({ ok: true, appareils: 0, envoyes: 0 });
+  const { envoyes, expires } = await pousser(abonnements, { kind: 'test', title: '💬 Test LEYBOTDY', body: 'Les notifications du chat fonctionnent ✅', tag: 'leybotdy-chat-test', url: '/chat' });
+  if (expires.size) {
+    const reste = abonnements.filter(x => !expires.has(x.endpoint));
+    if (reste.length) registre.chatPush[id] = reste; else delete registre.chatPush[id];
+    sauver();
+  }
+  res.json({ ok: true, appareils: abonnements.length, envoyes });
 });
 app.post('/api/chat/push/notifier', async (req, res) => {
   if (!PUSH_ACTIF) return res.json({ ok: true, envoyes: 0 });
