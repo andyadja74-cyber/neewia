@@ -131,7 +131,7 @@
     <h3>Personnalisation du Thème</h3>
     <p class="subtitle" style="text-align: left;">Choisis ton ambiance (sauvegardée automatiquement) :</p>
     <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center;">
-      <button onclick="changerThemeVerre()" title="Thème Verre (style du bot)" style="background: linear-gradient(150deg, rgba(255,255,255,0.28), rgba(159,227,255,0.12)); backdrop-filter: blur(8px); color: #fff; width: 50px; height: 50px; border-radius: 14px; padding:0; border: 2px solid rgba(207,239,255,0.7); font-size: 1.2rem; display: flex; align-items: center; justify-content: center;">🧊</button>
+      <button onclick="changerThemeVerre()" title="Thème Verre (comme le site)" style="background: linear-gradient(150deg, rgba(255,255,255,0.28), rgba(159,227,255,0.12)); backdrop-filter: blur(8px); color: #fff; width: 50px; height: 50px; border-radius: 14px; padding:0; border: 2px solid rgba(207,239,255,0.7); font-size: 1.2rem; display: flex; align-items: center; justify-content: center;">🫧</button>
       <button onclick="changerThemeGlacial()" title="Thème Glacial Polaire" style="background: rgba(135, 206, 250, 0.3); backdrop-filter: blur(8px); color: #fff; width: 50px; height: 50px; border-radius: 14px; padding:0; border: 2px solid rgba(255,255,255,0.6); font-size: 1.2rem; display: flex; align-items: center; justify-content: center;">❄️</button>
       <button onclick="changerTheme('--accent: #00dfa2; --accent-hover: #00ffb7; --bg-color: #0d1b1e; --card-bg: #13272c; --header-bg: #1b353b; --bubble-me: #1e4d3b; --bubble-other: #18333a; --border: rgba(255, 255, 255, 0.08);')" style="background: #00dfa2; width: 45px; height: 45px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2);"></button>
       <button onclick="changerTheme('--accent: #3b82f6; --accent-hover: #60a5fa; --bg-color: #0f172a; --card-bg: #1e293b; --header-bg: #334155; --bubble-me: #1d4ed8; --bubble-other: #334155; --border: rgba(255, 255, 255, 0.08);')" style="background: #3b82f6; width: 45px; height: 45px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2);"></button>
@@ -629,17 +629,17 @@ For vue qu'elle ne le sache pas ohh 😬</span>
   function changerThemeVerre() {
     changerTheme(`
       --glass: 1;
-      --bg-color: #02050b;
+      --bg-color: #03060d;
       --card-bg: rgba(255, 255, 255, 0.06);
-      --header-bg: rgba(255, 255, 255, 0.08);
-      --accent: #9fe3ff;
-      --accent-hover: #cdf1ff;
+      --header-bg: rgba(255, 255, 255, 0.10);
+      --accent: #f4f7ff;
+      --accent-hover: #ffffff;
       --text-main: #eaf6ff;
-      --text-muted: #8aa5bb;
-      --border: rgba(207, 239, 255, 0.18);
-      --bubble-me: rgba(59, 130, 255, 0.3);
-      --bubble-other: rgba(255, 255, 255, 0.09);
-      --danger: #ff7a8a;
+      --text-muted: #9fb0c8;
+      --border: rgba(255, 255, 255, 0.28);
+      --bubble-me: rgba(122, 168, 255, 0.30);
+      --bubble-other: rgba(255, 255, 255, 0.12);
+      --danger: #ff8f9d;
     `);
   }
 
@@ -702,7 +702,20 @@ For vue qu'elle ne le sache pas ohh 😬</span>
   }
   function demanderPermissionNotification() {
     synchroniserPushChat(true)
-      .then(() => alert("Notifications activées ! Tu recevras les messages privés même quand l'appli est fermée."))
+      .then(async () => {
+        // On envoie tout de suite une notification de test et on dit combien d'appareils sont enregistrés pour cet ID
+        try {
+          const r = await fetch('/api/chat/push/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: monID }) });
+          const d = await r.json().catch(() => ({}));
+          if (r.ok) {
+            alert(d.envoyes > 0
+              ? `Notifications activées ✅ (${d.appareils} appareil${d.appareils > 1 ? 's' : ''} enregistré${d.appareils > 1 ? 's' : ''} pour « ${monID} »). Une notification de test vient d'être envoyée.`
+              : `Activé, mais aucun appareil n'a reçu le test. Réessaie dans un instant.`);
+            return;
+          }
+          alert(d.erreur || "Activé, mais le test a échoué.");
+        } catch (e) { alert("Notifications activées."); }
+      })
       .catch(e => alert(e && e.message ? e.message : "Erreur pendant l'activation."));
   }
   // Prévient le serveur qu'un message privé vient d'être envoyé (il notifie le destinataire)
@@ -718,15 +731,12 @@ For vue qu'elle ne le sache pas ohh 😬</span>
     }).catch(() => {});
   }
 
-  function declencherNotificationNatif(titre, corps) {
+  // Notification flottante, que l'appli soit ouverte ou non. Le « tag » identique à celui du serveur évite les doublons : la nouvelle remplace l'ancienne.
+  function declencherNotificationNatif(titre, corps, tag) {
     if (Notification.permission === "granted") {
+      const options = { body: corps, icon: '/icon-192.png', badge: '/icon-192.png', tag: tag || undefined, renotify: !!tag, data: { url: '/chat' } };
       try {
-        navigator.serviceWorker.ready.then(reg => {
-          reg.showNotification(titre, {
-            body: corps,
-            icon: 'icon-192.png'
-          });
-        });
+        navigator.serviceWorker.ready.then(reg => reg.showNotification(titre, options));
       } catch(e) {
         new Notification(titre, { body: corps });
       }
@@ -1160,7 +1170,7 @@ For vue qu'elle ne le sache pas ohh 😬</span>
           if (aperçu && aperçu.startsWith("[AUDIO:")) aperçu = "[Message vocal reçu]";
           
           jouerSonNotification();
-          declencherNotificationNatif(`Nouveau message de ${msgData.expediteur}`, aperçu);
+          declencherNotificationNatif(`💬 ${msgData.expediteur}`, aperçu, `leybotdy-chat-${msgData.expediteur}`);
         }
       }
       premierChargement = false;
@@ -1371,7 +1381,7 @@ For vue qu'elle ne le sache pas ohh 😬</span>
           if (aperçu && aperçu.startsWith("[AUDIO:")) aperçu = "[Message vocal reçu]";
           
           jouerSonNotification();
-          declencherNotificationNatif(`Nouveau message de ${msgData.expediteur} (${codeSalon})`, aperçu);
+          declencherNotificationNatif(`💬 ${msgData.expediteur} (${codeSalon})`, aperçu, `leybotdy-salon-${codeSalon}`);
         }
       }
       premierChargement = false;

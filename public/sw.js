@@ -1,5 +1,5 @@
 // Service worker LEYBOTDY : réseau d'abord (toujours à jour), copie en secours si le réseau coupe. Les appels /api ne sont jamais mis en cache.
-const V = 'leybotdy-v5';
+const V = 'leybotdy-v7';
 const BASE = ['/offline.html', '/manifest.webmanifest', '/icon-192.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(BASE)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {
@@ -19,11 +19,6 @@ self.addEventListener('push', event => {
   try { data = event.data ? event.data.json() : {}; }
   catch (_) { data = { body: event.data ? event.data.text() : '' }; }
   event.waitUntil((async () => {
-    // Message du chat alors que l'appli est ouverte et au premier plan : le chat joue déjà son propre son/alerte
-    if (data.kind === 'chat') {
-      const fenetres = await clients.matchAll({ type: 'window', includeUncontrolled: true });
-      if (fenetres.some(c => c.visibilityState === 'visible' && c.focused)) return;
-    }
     await self.registration.showNotification(data.title || 'LEYBOTDY', {
       body: data.body || 'Une nouvelle activité nécessite ton attention.',
       icon: '/icon-192.png',

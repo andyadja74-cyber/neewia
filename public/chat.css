@@ -308,64 +308,82 @@ button:active { transform: scale(0.98); }
 
 
 /* =========================================================
-   🧊 THÈME « VERRE » : le style transparent du bot
-   S'active avec la classe body.glass (ajoutée par changerThemeVerre)
+   🫧 THÈME « VERRE » : le même verre transparent (liquid glass) que index.html et admin.html
+   S'active avec la classe body.glass ; c'est le thème par défaut.
    ========================================================= */
 .fond, .motif { display: none; }
 
-body.glass .fond { display: block; position: fixed; inset: 0; z-index: -2; pointer-events: none; background: radial-gradient(120% 80% at 50% 0, #0a1830, #02050b 62%); }
-body.glass .fond i { position: absolute; border-radius: 50%; filter: blur(70px); opacity: .55; animation: glassFl 16s ease-in-out infinite alternate; }
-body.glass .fond i:nth-child(1) { width: 50vmax; height: 50vmax; left: -14vmax; top: -10vmax; background: #1d6fff55; }
-body.glass .fond i:nth-child(2) { width: 42vmax; height: 42vmax; right: -12vmax; bottom: -8vmax; background: #7a5cff40; animation-delay: -7s; }
-@keyframes glassFl { to { transform: translate3d(0, -26px, 0) scale(1.05); } }
-body.glass .motif{display:block;position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.5;-webkit-mask:radial-gradient(ellipse at center,#000 30%,transparent 80%);mask:radial-gradient(ellipse at center,#000 30%,transparent 80%);background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='104'%3E%3Cg fill='none' stroke='%239fe3ff' stroke-opacity='.15'%3E%3Cpath d='M60 6 108 30v44L60 98 12 74V30z'/%3E%3Cpath d='M60 6v92M12 30l96 44M108 30 12 74'/%3E%3Ccircle cx='60' cy='52' r='9'/%3E%3C/g%3E%3C/svg%3E")}
-
-/* Couleurs du thème Verre (placées sur body.glass : elles s'appliquent dès l'ouverture, sans attendre le script) */
 body.glass {
-  --bg-color: #02050b;
+  --bg-color: #03060d;
   --card-bg: rgba(255, 255, 255, 0.06);
-  --header-bg: rgba(255, 255, 255, 0.08);
-  --accent: #9fe3ff;
-  --accent-hover: #cdf1ff;
+  --header-bg: rgba(255, 255, 255, 0.10);
+  --accent: #f4f7ff;
+  --accent-hover: #ffffff;
   --text-main: #eaf6ff;
-  --text-muted: #8aa5bb;
-  --border: rgba(207, 239, 255, 0.18);
-  --bubble-me: rgba(59, 130, 255, 0.3);
-  --bubble-other: rgba(255, 255, 255, 0.09);
-  --danger: #ff7a8a;
-  background-color: #02050b;
+  --text-muted: #9fb0c8;
+  --border: rgba(255, 255, 255, 0.28);
+  --bubble-me: rgba(122, 168, 255, 0.30);
+  --bubble-other: rgba(255, 255, 255, 0.12);
+  --danger: #ff8f9d;
+  background-color: #03060d;
 }
+/* Lueurs de fond : bleu en haut à gauche, violet à droite, turquoise en bas à gauche, rose en bas à droite */
+body.glass .fond {
+  display: block; position: fixed; inset: 0; z-index: -2; pointer-events: none;
+  background:
+    radial-gradient(60% 45% at 12% 8%, #3d6bff8c, transparent 70%),
+    radial-gradient(55% 45% at 92% 34%, #b45cff73, transparent 70%),
+    radial-gradient(60% 45% at 28% 96%, #00d6c26b, transparent 70%),
+    radial-gradient(40% 30% at 85% 90%, #ff5ca059, transparent 70%),
+    #03060d;
+}
+body.glass .fond i, body.glass .motif { display: none; }
+
 body.glass .app-container {
-  background: linear-gradient(150deg, #ffffff1f, #ffffff08 45%, #9fe3ff10);
-  border: 1px solid #cfefff2e;
-  backdrop-filter: blur(30px) saturate(170%);
-  -webkit-backdrop-filter: blur(30px) saturate(170%);
-  box-shadow: inset 0 1.5px 0 #ffffff55, 0 30px 80px #000a;
+  background: linear-gradient(140deg, #ffffff2b, #ffffff0b 45%, #ffffff17);
+  border: 1px solid #ffffff47;
+  backdrop-filter: blur(26px) saturate(185%) brightness(1.08);
+  -webkit-backdrop-filter: blur(26px) saturate(185%) brightness(1.08);
+  box-shadow: inset 1.5px 1.5px 0 #ffffff80, inset -1px -1px 0 #ffffff26, inset 0 0 26px #ffffff0d, 0 24px 60px #0007;
 }
 body.glass .dashboard-header,
 body.glass .input-chat-row,
-body.glass .reply-banner { background: linear-gradient(180deg, #ffffff14, #ffffff08); border-color: #ffffff22; }
-body.glass input { background: #0a162866; border: 1px solid #cfefff2e; }
-body.glass input:focus { background: #0a162299; border-color: #9fe3ff; box-shadow: 0 0 0 3px #9fe3ff22; }
-body.glass button { background: linear-gradient(180deg, #e6f8ff, #8fd8ff); color: #04121f; box-shadow: inset 0 1px 0 #ffffffaa, 0 6px 18px #0006; }
-body.glass .btn-secondary { background: linear-gradient(150deg, #ffffff22, #ffffff0a); color: var(--text-main); border: 1px solid #cfefff33; box-shadow: inset 0 1px 0 #ffffff40; }
-body.glass .friend-item { background: linear-gradient(150deg, #ffffff1c, #ffffff08); border-color: #ffffff26; box-shadow: inset 0 1px 0 #ffffff30; }
-body.glass .message-bubble.me { background: linear-gradient(160deg, #3b82ff55, #6fb6ff22); border: 1px solid #9fe3ff45; }
-body.glass .message-bubble.other { background: linear-gradient(150deg, #ffffff1c, #ffffff08); border: 1px solid #ffffff24; }
+body.glass .reply-banner {
+  background: linear-gradient(150deg, #ffffff24, #ffffff0a);
+  border-color: #ffffff30;
+  box-shadow: inset 1px 1px 0 #ffffff40;
+}
+body.glass input {
+  background: #ffffff14; border: 1px solid #ffffff3d;
+  box-shadow: inset 0 2px 8px #0004, inset 1px 1px 0 #ffffff22;
+}
+body.glass input:focus { background: #ffffff1c; border-color: #ffffffcc; box-shadow: 0 0 0 4px #ffffff22, inset 0 2px 8px #0003; }
+body.glass button {
+  color: #fff; text-shadow: 0 1px 8px #0006;
+  background: linear-gradient(180deg, #ffffff6e, #ffffff24 55%, #ffffff38);
+  border: 1px solid #ffffff7a;
+  box-shadow: inset 0 1.5px 0 #ffffffcc, inset 0 -8px 16px #ffffff14, 0 10px 30px #0006;
+}
+body.glass .btn-secondary {
+  color: #fff; background: linear-gradient(180deg, #ffffff30, #ffffff10);
+  border: 1px solid #ffffff40; box-shadow: inset 0 1px 0 #ffffff66;
+}
+body.glass .friend-item {
+  background: linear-gradient(150deg, #ffffff24, #ffffff0a); border-color: #ffffff30;
+  box-shadow: inset 1px 1px 0 #ffffff55, inset -1px -1px 0 #ffffff14;
+}
+body.glass .message-bubble.me { background: linear-gradient(150deg, #ffffff3d, #7aa8ff38); border: 1px solid #ffffff55; }
+body.glass .message-bubble.other { background: linear-gradient(150deg, #ffffff24, #ffffff0c); border: 1px solid #ffffff33; }
 body.glass .msg-actions,
 body.glass .emoji-picker-container,
-body.glass .sticker-picker-container { background: #0b1626f2; border-color: #ffffff2e; }
-body.glass .msg-action-btn { background: none; box-shadow: none; color: var(--text-main); }
+body.glass .sticker-picker-container { background: rgba(14, 20, 42, 0.94); border-color: #ffffff40; }
+body.glass .msg-action-btn { background: none; box-shadow: none; text-shadow: none; color: var(--text-main); }
 
-/* Mobile : on allège (comme le panneau admin) pour que ça reste fluide */
+/* Mobile : pas de flou en direct (comme le site), un verre plus opaque à la place, pour rester fluide */
 @media (max-width: 700px) {
-  body.glass .fond i { filter: blur(50px); animation: none; }
-  body.glass .app-container { backdrop-filter: none; -webkit-backdrop-filter: none; background: linear-gradient(150deg, #16243bf0, #0a1424f2); }
+  body.glass .app-container {
+    backdrop-filter: none; -webkit-backdrop-filter: none;
+    background: linear-gradient(140deg, #ffffff30, #ffffff12 50%, #ffffff1c);
+    box-shadow: inset 1.5px 1.5px 0 #ffffff80, inset -1px -1px 0 #ffffff26, 0 16px 40px #0007;
+  }
 }
-
-
-/* Performance : lueurs en dégradés simples (plus de gros flou animé), pas de masque sur mobile */
-body.glass .fond i { filter: none; animation: none; opacity: 1; }
-body.glass .fond i:nth-child(1) { background: radial-gradient(circle, #1d6fff55, transparent 65%); }
-body.glass .fond i:nth-child(2) { background: radial-gradient(circle, #7a5cff40, transparent 65%); }
-@media (max-width: 700px) { body.glass .motif { display: none; } }
