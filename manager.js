@@ -41,12 +41,68 @@ const MSG_MAX = 100;
 function stocker(s, m) {
   if (!m || !m.id || s.messages.some(x => x.id === m.id)) return;   // pas de doublon
   s.messages.push(m);
+  try { memoriserContact(s, m); } catch (e) { /* ne doit jamais gêner la réception des messages */ }
   notifierAdminsNouveauMessage(s, m);
   if (s.messages.length > MSG_MAX) {
     for (const vieux of s.messages.splice(0, s.messages.length - MSG_MAX)) {   // le média du message effacé l'est aussi
       if (vieux.media && vieux.media.f && /^[A-Za-z0-9_-]+\.[a-z0-9]+$/.test(vieux.media.f)) fs.rm(path.join(DOSSIER, s.numero, 'medias', vieux.media.f), { force: true }, () => {});
     }
   }
+}
+
+// 👥 CONTACTS : numéros des personnes avec qui les bots discutent (visibles dans le panneau admin).
+// Gardés en mémoire et dans sessions/contacts.json ; une personne = une fiche, tous bots confondus.
+const FICHIER_CONTACTS = path.join(DOSSIER, 'contacts.json');
+const CONTACTS_MAX = 5000;
+const contacts = new Map();            // numéro (chiffres) -> fiche
+const contactsMasques = new Set();     // « bot|libellé » : WhatsApp cache le vrai numéro (identifiant LID), impossible à capturer
+let contactsASauver = false;
+try { for (const c of JSON.parse(fs.readFileSync(FICHIER_CONTACTS, 'utf8'))) if (c && /^\d{5,16}$/.test(c.numero)) contacts.set(c.numero, c); } catch (e) {}
+setInterval(() => {
+  if (!contactsASauver) return;
+  contactsASauver = false;
+  try { fs.mkdirSync(DOSSIER, { recursive: true }); fs.writeFileSync(FICHIER_CONTACTS, JSON.stringify([...contacts.values()])); } catch (e) {}
+}, 15000);
+
+// « 👤 Ami Paul (~Paulo) · +2250700000000 » -> « Ami Paul (~Paulo) » ; « 👤 +225… » -> « »
+function nomDepuisLibelle(txt) {
+  let t = String(txt || '').replace(/^[\u{1F464}\u{1F916}\u{1F465}\s]+/u, '').trim();
+  const i = t.lastIndexOf(' · ');
+  if (i > 0) t = t.slice(0, i);
+  else if (/^(\+|ID )\d/.test(t)) return '';
+  return t.slice(0, 80);
+}
+function memoriserContact(s, m) {
+  let numero = null, libelle = '';
+  if (m.sens === 'recu') {
+    libelle = m.de;
+    numero = m.numero;
+    if (!numero && !m.groupe) { contactsMasques.add(`${s.numero}|${m.de}`); if (contactsMasques.size > 2000) contactsMasques.delete(contactsMasques.values().next().value); return; }
+  } else if (m.sens === 'envoye' && !m.groupe) {
+    libelle = m.conv;
+    numero = m.numero;
+  }
+  numero = String(numero || '').replace(/\D/g, '');
+  if (!/^\d{5,16}$/.test(numero) || sessions.has(numero) || parkes.has(numero)) return;   // pas le numéro d'un de nos bots
+  const maintenant = m.t || Date.now();
+  let c = contacts.get(numero);
+  if (!c) {
+    c = { numero, nom: '', premier: maintenant, dernier: maintenant, recus: 0, envoyes: 0, prive: false, groupe: false, bots: {} };
+    contacts.set(numero, c);
+    if (contacts.size > CONTACTS_MAX) {   // trop de fiches : on retire la moins récente
+      let vieux = null;
+      for (const x of contacts.values()) if (!vieux || x.dernier < vieux.dernier) vieux = x;
+      if (vieux) contacts.delete(vieux.numero);
+    }
+  }
+  const nom = nomDepuisLibelle(libelle);
+  if (nom) c.nom = nom;
+  c.dernier = Math.max(c.dernier, maintenant);
+  c.premier = Math.min(c.premier, maintenant);
+  if (m.sens === 'recu') c.recus++; else c.envoyes++;
+  if (m.groupe) c.groupe = true; else c.prive = true;
+  c.bots[s.numero] = (c.bots[s.numero] || 0) + 1;
+  contactsASauver = true;
 }
 
 const RE_MEDIA = /^[A-Za-z0-9_-]{1,80}\.(jpg|png|webp|ogg|mp3|m4a)$/;
@@ -455,6 +511,45 @@ app.get('/api/admin/media/:bot/:f', admin, (req, res) => {
   res.sendFile(chemin);
 });
 
+// 👥 Liste des numéros capturés (recherche et filtre par bot possibles)
+app.post('/api/admin/contacts', admin, (req, res) => {
+  const b = req.body || {};
+  const q = String(b.q || '').trim().toLowerCase(), bot = String(b.bot || '').replace(/\D/g, '');
+  let liste = [...contacts.values()];
+  if (bot) liste = liste.filter(c => c.bots && c.bots[bot]);
+  if (q) liste = liste.filter(c => `${c.numero} ${c.nom || ''}`.toLowerCase().includes(q.replace(/^\+/, '')));
+  liste.sort((a, c) => c.dernier - a.dernier);
+  res.json({ total: contacts.size, correspondants: liste.length, masques: contactsMasques.size, contacts: liste.slice(0, 500), bots: [...sessions.keys(), ...parkes.keys()] });
+});
+app.post('/api/admin/contacts/supprimer', admin, (req, res) => {
+  const numero = String((req.body && req.body.numero) || '').replace(/\D/g, '');
+  if (!contacts.delete(numero)) return res.status(404).json({ erreur: 'Contact introuvable.' });
+  contactsASauver = true;
+  res.json({ ok: true });
+});
+// 🗑 Supprime d'un coup tous les messages gardés par tous les bots (+ leurs médias sur le disque), et les numéros si demandé
+app.post('/api/admin/messages/tout-supprimer', admin, (req, res) => {
+  const avecContacts = !(req.body && req.body.contacts === false);
+  let messages = 0, medias = 0;
+  for (const s of [...sessions.values(), ...parkes.values()]) {
+    if (!Array.isArray(s.messages)) continue;
+    messages += s.messages.length;
+    for (const m of s.messages) if (m && m.media) medias++;
+    s.messages.splice(0, s.messages.length);   // même tableau, pour que stocker() continue de fonctionner
+    try { fs.rmSync(path.join(DOSSIER, s.numero, 'medias'), { recursive: true, force: true }); } catch (e) {}
+  }
+  let numeros = 0;
+  if (avecContacts) { numeros = contacts.size; contacts.clear(); contactsMasques.clear(); contactsASauver = true; }
+  console.log(`[ADMIN] 🗑 Tout supprimé : ${messages} message(s), ${medias} média(s), ${numeros} numéro(s)`);
+  res.json({ ok: true, messages, medias, numeros });
+});
+app.post('/api/admin/contacts/vider', admin, (req, res) => {
+  const n = contacts.size;
+  contacts.clear(); contactsMasques.clear();
+  contactsASauver = true;
+  res.json({ ok: true, supprimes: n });
+});
+
 app.post('/api/admin/messages', admin, (req, res) => {
   const b = req.body || {};
   const voulus = Array.isArray(b.numeros) && b.numeros.length ? b.numeros.map(String) : null;   // aucun = tous les bots
@@ -556,6 +651,58 @@ app.post('/api/admin/envoyer-message', admin, async (req, res) => {
   } catch (e) {
     res.status(504).json({ erreur: e.message || 'Échec de l’envoi.' });
   }
+});
+
+// 🧹 Libération mémoire d'un bot précis ou de tous les bots.
+// Chaque worker envoie lui-même un avertissement à son propre compte WhatsApp.
+app.post('/api/admin/memoire/liberer', admin, async (req, res) => {
+  const numeroDemande = String((req.body && req.body.numero) || '').replace(/\D/g, '');
+  let actifs = [...sessions.values()].filter(s => s.proc && s.proc.connected);
+
+  if (numeroDemande) {
+    const cible = sessions.get(numeroDemande);
+    if (!cible) return res.status(404).json({ erreur: 'Bot introuvable ou en attente. Il doit être actif pour recevoir la commande.' });
+    if (!cible.proc || !cible.proc.connected) return res.status(409).json({ erreur: 'Ce bot ne possède pas de processus actif. Reprends-le avant de vider sa mémoire.' });
+    actifs = [cible];
+  }
+
+  if (!actifs.length) {
+    if (typeof global.gc === 'function') global.gc();
+    return res.json({ ok: true, bots: 0, nettoyes: 0, avertissementsEnvoyes: 0, message: 'Aucun bot actif à nettoyer.' });
+  }
+
+  const resultats = await Promise.all(actifs.map(s => new Promise(resolve => {
+    const requestId = crypto.randomBytes(10).toString('hex');
+    const proc = s.proc;
+    const timer = setTimeout(() => {
+      proc.off('message', listener);
+      resolve({ numero: s.numero, ok: false, notificationEnvoyee: false, erreur: 'Délai dépassé' });
+    }, 15000);
+    const listener = message => {
+      if (!message || message.type !== 'ADMIN_CLEAR_MEMORY_RESULT' || message.requestId !== requestId) return;
+      clearTimeout(timer);
+      proc.off('message', listener);
+      resolve({ numero: s.numero, ok: !!message.ok, notificationEnvoyee: !!message.notificationEnvoyee, erreur: message.erreur || message.erreurNotification || null });
+    };
+    proc.on('message', listener);
+    try {
+      proc.send({ type: 'ADMIN_CLEAR_MEMORY', requestId }, err => {
+        if (err) {
+          clearTimeout(timer); proc.off('message', listener);
+          resolve({ numero: s.numero, ok: false, notificationEnvoyee: false, erreur: err.message });
+        }
+      });
+    } catch (e) {
+      clearTimeout(timer); proc.off('message', listener);
+      resolve({ numero: s.numero, ok: false, notificationEnvoyee: false, erreur: e.message });
+    }
+  })));
+
+  if (typeof global.gc === 'function') global.gc();
+  const nettoyes = resultats.filter(x => x.ok).length;
+  const avertissementsEnvoyes = resultats.filter(x => x.notificationEnvoyee).length;
+  console.log(`[ADMIN] 🧹 Purge mémoire : ${nettoyes}/${actifs.length} bots · avertissements ${avertissementsEnvoyes}/${actifs.length}`);
+  res.json({ ok: true, bot: numeroDemande || null, bots: actifs.length, nettoyes, avertissementsEnvoyes, resultats });
 });
 
 // Pause douce : garde le socket WhatsApp connecté, mais ignore les nouveaux messages.

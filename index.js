@@ -54,6 +54,53 @@ process.on('message', async (commande) => {
   if (commande.type === 'BOT_PAUSE') { botEnPause = true; return; }
   if (commande.type === 'BOT_RESUME') { botEnPause = false; return; }
 
+  // 🧹 Purge immédiate des caches temporaires, sans toucher à la session WhatsApp ni aux profils.
+  if (commande.type === 'ADMIN_CLEAR_MEMORY') {
+    try {
+      const avant = process.memoryUsage().rss;
+      for (const id of Object.keys(messageCache)) delete messageCache[id];
+      antiDeleteCacheBytes = 0;
+      processedMessages.clear();
+      contactsConnus.clear(); groupesConnus.clear(); lidVersNumero.clear();
+      dernieresCommandes.clear(); demandesYasmine.clear(); vuDejaVus.clear();
+      AUDIO_VOCAL_CACHE.clear(); messagesSupprimes.clear(); mesEnvois.clear();
+      motDePasseDepuis.clear(); DEMANDES_MARIAGE.clear(); draguesEnCours.clear();
+      iaConversations.clear(); iaDernierePar.clear(); gumballEnAttente.clear();
+      DERNIER_ACCUEIL.clear();
+      for (const k of Object.keys(vueUniqueCache)) {
+        try { supprimerFichierVue(vueUniqueCache[k]); } catch (_) {}
+        delete vueUniqueCache[k];
+      }
+      for (const f of fs.readdirSync(TMP_DIR)) {
+        try { fs.unlinkSync(path.join(TMP_DIR, f)); } catch (_) {}
+      }
+      if (typeof global.gc === 'function') global.gc();
+      const apres = process.memoryUsage().rss;
+      console.log(`[ADMIN] 🧹 Caches temporaires vidés · RSS ${Math.round(avant/1048576)} → ${Math.round(apres/1048576)} Mo`);
+
+      // 📣 Chaque bot prévient son propre compte WhatsApp après le nettoyage.
+      // Le message est envoyé au JID du compte connecté (pas au numéro du propriétaire).
+      let notificationEnvoyee = false;
+      let erreurNotification = null;
+      try {
+        if (!sock || !sock.user || !sock.user.id) throw new Error('Compte WhatsApp non connecté.');
+        const numeroBot = String(sock.user.id).split(':')[0].split('@')[0];
+        const jidPropre = numeroBot + '@s.whatsapp.net';
+        await sock.sendMessage(jidPropre, {
+          text: '⚠️ *AVERTISSEMENT — LEYBOTDY*\n\nL’administrateur vient de vider la mémoire temporaire de votre bot.\n\n🧹 Les caches et données temporaires ont été nettoyés. Certaines données temporaires (comme les contextes IA et caches anti-delete/view-once) ne sont plus disponibles.\n\n✅ Votre compte WhatsApp reste connecté. Les paramètres et données persistantes n’ont pas été supprimés.'
+        });
+        notificationEnvoyee = true;
+      } catch (e) {
+        erreurNotification = e && e.message ? e.message : 'Envoi de l’avertissement impossible.';
+        console.error('[ADMIN] ⚠️ Avertissement WhatsApp non envoyé :', erreurNotification);
+      }
+      if (process.send) process.send({ type: 'ADMIN_CLEAR_MEMORY_RESULT', requestId: commande.requestId, ok: true, notificationEnvoyee, erreurNotification });
+    } catch (e) {
+      if (process.send) process.send({ type: 'ADMIN_CLEAR_MEMORY_RESULT', requestId: commande.requestId, ok: false, erreur: e.message });
+    }
+    return;
+  }
+
   // ✉️ Envoi manuel demandé par le panneau admin (ne dépend pas du mode pause du bot).
   if (commande.type === 'ADMIN_SEND_TEXT' && commande.requestId) {
     const repondre = (ok, erreur) => {
@@ -80,7 +127,12 @@ process.on('message', async (commande) => {
         sock.sendMessage(jid, { text: message }),
         sleep(20000).then(() => { throw new Error('WhatsApp n’a pas confirmé l’envoi (délai dépassé).'); })
       ]);
-      if (envoye && envoye.key && envoye.key.id) { processedMessages.add(envoye.key.id); memoriserMonEnvoi(jid, envoye.key); }
+      if (envoye && envoye.key && envoye.key.id) {
+        memoriserMonEnvoi(jid, envoye.key);
+        // Les messages ordinaires envoyés manuellement ne doivent pas être interprétés
+        // comme des commandes/réponses par le bot ; une vraie commande reste exécutable.
+        if (!estCommandeReconnue(message.toLowerCase())) processedMessages.add(envoye.key.id);
+      }
       console.log(`[ADMIN] ✉️ Message envoyé vers …${destinataire.slice(-4)}`);
       repondre(true);
     } catch (e) {
@@ -2852,63 +2904,90 @@ async function startBot() {
       }
     }
 
-  // 🛡 DÉTECTION DES MESSAGES SUPPRIMÉS (ANTI-DELETE)
-  // Les messages que TOI (le compte du bot) supprimes ne sont jamais renvoyés : seulement ceux des autres.
-  sock.ev.on('messages.update', async (updates) => {
-    if (botEnPause) return;
-    for (const update of updates) {
-      const estSupprime = (update.update && update.update.message === null) || update.update?.protocolMessage?.type === 0;
-      if (!estSupprime) continue;
+  // 🛡 ANTI-DELETE : Baileys peut signaler une révocation via messages.update
+  // ou via un protocolMessage reçu dans messages.upsert. On gère les deux formats.
+  const suppressionsTraitees = new Set();
+  async function traiterAntiDelete(cleMessage, protocole) {
+    if (botEnPause || !cleMessage) return;
+    const estRevoke = protocole?.type === 0 || protocole?.type === 'REVOKE';
+    if (!estRevoke) return;
+    const cible = protocole?.key || cleMessage;
+    const deletedId = cible?.id;
+    if (!deletedId || suppressionsTraitees.has(deletedId)) return;
+    suppressionsTraitees.add(deletedId);
+    if (suppressionsTraitees.size > 500) suppressionsTraitees.clear();
 
-      // 🚫 Suppression faite par toi
-      if (update.key.fromMe) continue;
+    const cachedMsg = messageCache[deletedId];
+    if (!cachedMsg || cachedMsg.fromMe) return;
+    const botNumber = sock.user?.id?.split(':')[0] + '@s.whatsapp.net';
+    if (!sock.user || cachedMsg.sender === botNumber) return;
 
-      const deletedId = update.key.id;
-      const cachedMsg = messageCache[deletedId];
-      if (!cachedMsg) continue;
+    const remoteJid = cible.remoteJid || cleMessage.remoteJid;
+    if (!remoteJid) return;
+    const sender = cachedMsg.sender || cible.participant || remoteJid;
+    const senderName = profilsJoueurs[sender] || `@${String(sender).split('@')[0]}`;
+    const destination = ANTI_DELETE_DEST === 'chat' ? remoteJid : botNumber;
+    const chatLabel = remoteJid.endsWith('@g.us') ? `Groupe : ${remoteJid}` : `Conversation : ${remoteJid.split('@')[0]}`;
+    const alertText = `🚨 *TITAN BOT — ANTI-DELETE*\n👤 *Auteur :* ${senderName}\n📱 *Numéro :* ${String(sender).split('@')[0]}\n💬 *Origine :* ${chatLabel}\n📅 *Date :* ${cachedMsg.fdate || 'Récemment'}\n`;
 
-      // 🚫 Message qui t'appartient (sécurité supplémentaire)
-      const botNumber = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-      if (cachedMsg.fromMe || cachedMsg.sender === botNumber) continue;
-
-      const remoteJid = update.key.remoteJid;
-      const sender = cachedMsg.sender;
-      const senderName = profilsJoueurs[sender] || `@${sender.split('@')[0]}`;
-      const destination = ANTI_DELETE_DEST === 'chat' ? remoteJid : botNumber;
-      const chatLabel = remoteJid.endsWith('@g.us') ? `Groupe : ${remoteJid}` : `Conversation : ${remoteJid.split('@')[0]}`;
-      const alertText = `🚨 *TITAN BOT — ANTI-DELETE*\n👤 *Auteur :* ${senderName}\n📱 *Numéro :* ${sender.split('@')[0]}\n💬 *Origine :* ${chatLabel}\n📅 *Date :* ${cachedMsg.fdate || 'Récemment'}\n`;
-
-      try {
-        if (cachedMsg.text) {
-          await sock.sendMessage(destination, {
-            text: `${alertText}\n🗑️ *Message supprimé :*\n${cachedMsg.text}`
-          });
-        } else if (cachedMsg.mediaMessage && cachedMsg.buffer) {
-          const type = cachedMsg.mediaType;
-          const caption = `${alertText}${cachedMsg.caption ? `\n📝 *Légende :* ${cachedMsg.caption}` : ''}`;
-          if (type === 'audio') {
-            await sock.sendMessage(destination, { audio: cachedMsg.buffer, mimetype: cachedMsg.mimetype || 'audio/ogg; codecs=opus', ptt: false });
-            await sock.sendMessage(destination, { text: caption });
-          } else if (type === 'document') {
-            await sock.sendMessage(destination, { document: cachedMsg.buffer, mimetype: cachedMsg.mimetype || 'application/octet-stream', fileName: cachedMsg.fileName || 'message-recupere', caption });
-          } else if (type === 'sticker') {
-            await sock.sendMessage(destination, { sticker: cachedMsg.buffer });
-            await sock.sendMessage(destination, { text: caption });
-          } else {
-            await sock.sendMessage(destination, { [type]: cachedMsg.buffer, caption });
-          }
+    try {
+      if (cachedMsg.text) {
+        await sock.sendMessage(destination, { text: `${alertText}\n🗑️ *Message supprimé :*\n${cachedMsg.text}` });
+      } else if (cachedMsg.mediaMessage && cachedMsg.buffer) {
+        const type = cachedMsg.mediaType;
+        const caption = `${alertText}${cachedMsg.caption ? `\n📝 *Légende :* ${cachedMsg.caption}` : ''}`;
+        if (type === 'audio') {
+          await sock.sendMessage(destination, { audio: cachedMsg.buffer, mimetype: cachedMsg.mimetype || 'audio/ogg; codecs=opus', ptt: false });
+          await sock.sendMessage(destination, { text: caption });
+        } else if (type === 'document') {
+          await sock.sendMessage(destination, { document: cachedMsg.buffer, mimetype: cachedMsg.mimetype || 'application/octet-stream', fileName: cachedMsg.fileName || 'message-recupere', caption });
+        } else if (type === 'sticker') {
+          await sock.sendMessage(destination, { sticker: cachedMsg.buffer });
+          await sock.sendMessage(destination, { text: caption });
+        } else {
+          await sock.sendMessage(destination, { [type]: cachedMsg.buffer, caption });
         }
-        console.log(`🛡️ Anti-delete transmis vers ${destination}`);
-      } catch (e) {
-        console.error('⚠️ Anti-delete : envoi impossible :', e && e.message ? e.message : e);
+      } else {
+        await sock.sendMessage(destination, { text: `${alertText}\n🗑️ *Message supprimé* (média non conservé dans le cache).` });
       }
+      console.log(`🛡️ Anti-delete transmis vers ${destination}`);
+      delete messageCache[deletedId];
+      if (cachedMsg.buffer) antiDeleteCacheBytes = Math.max(0, antiDeleteCacheBytes - cachedMsg.buffer.length);
+    } catch (e) {
+      console.error('⚠️ Anti-delete : envoi impossible :', e?.message || e);
+    }
+  }
+
+  sock.ev.on('messages.update', async (updates) => {
+    for (const update of updates || []) {
+      const estSupprime = update?.update?.message === null ||
+        update?.update?.protocolMessage?.type === 0 ||
+        update?.update?.protocolMessage?.type === 'REVOKE';
+      if (estSupprime) await traiterAntiDelete(update.key, update.update?.protocolMessage || { type: 0 });
     }
   });
 
   sock.ev.on('messages.upsert', async (m) => {
     try {
       const msg = m.messages[0];
-      if (!msg || !msg.message) return;
+      if (!msg) return;
+      // Certains événements de suppression arrivent directement dans messages.upsert.
+      const contenuBrut = msg.message || {};
+      const protocole = contenuBrut.protocolMessage ||
+        contenuBrut.ephemeralMessage?.message?.protocolMessage ||
+        contenuBrut.deviceSentMessage?.message?.protocolMessage;
+      if (protocole && (protocole.type === 0 || protocole.type === 'REVOKE')) {
+        await traiterAntiDelete(msg.key, protocole);
+        return;
+      }
+      if (!msg.message) return;
+      // Baileys peut grouper plusieurs messages dans un seul upsert : rejouer les suivants
+      // individuellement pour éviter qu'un message déjà traité masque les suivants.
+      if (Array.isArray(m.messages) && m.messages.length > 1) {
+        for (const suivant of m.messages.slice(1)) {
+          setImmediate(() => sock.ev.emit('messages.upsert', { ...m, messages: [suivant] }));
+        }
+      }
       if (msg.key && msg.key.fromMe && !msg.message.protocolMessage) memoriserMonEnvoi(msg.key.remoteJid, msg.key);
 
       if (msg.key.fromMe && processedMessages.has(msg.key.id)) return;
@@ -2928,7 +3007,7 @@ async function startBot() {
       // (pas de await : on n'attend ni le journal, ni la liste des admins du groupe, ni la réponse de WhatsApp)
       if (msg.key.fromMe) {
         const texteBrut = (msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || '').trim();
-        if (texteBrut && !/^\.private\s+(on|off)$/i.test(texteBrut) && (/^\.[a-z0-9]/i.test(texteBrut) || estCommandeReconnue(texteBrut.toLowerCase()))) {
+        if (texteBrut && (/^\.[a-z0-9]/i.test(texteBrut) || estCommandeReconnue(texteBrut.toLowerCase()))) {
           effacerMessage(sock, remoteJid, msg.key);
         }
       }
@@ -2940,8 +3019,6 @@ async function startBot() {
 
       const timestamp = msg.messageTimestamp ? msg.messageTimestamp * 1000 : Date.now();
       const formattedDate = new Date(timestamp).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'medium' });
-      await journaliserMessage(sock, msg);
-
       const botNumber = sock.user.id.split(':')[0] + '@s.whatsapp.net';
       const isFromBot = msg.key.fromMe || senderJid === botNumber;
       const cleanText = (msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || "").trim();
@@ -2953,9 +3030,11 @@ async function startBot() {
       if (storedContent?.ephemeralMessage) storedContent = storedContent.ephemeralMessage.message;
       if (storedContent?.viewOnceMessageV2) storedContent = storedContent.viewOnceMessageV2.message;
       if (storedContent?.viewOnceMessage) storedContent = storedContent.viewOnceMessage.message;
-      const textToCache = storedContent?.conversation || storedContent?.extendedTextMessage?.text || '';
+      const textToCache = storedContent?.conversation || storedContent?.extendedTextMessage?.text || storedContent?.imageMessage?.caption || storedContent?.videoMessage?.caption || storedContent?.documentMessage?.caption || '';
       if (!msg.key.fromMe) {
         const cacheEntry = { sender: senderJid, fromMe: false, text: textToCache, fdate: formattedDate };
+        // Enregistrer le texte tout de suite : journalisation et téléchargement média peuvent prendre du temps.
+        messageCache[messageId] = cacheEntry;
         const mediaKeys = [
           ['imageMessage', 'image'], ['videoMessage', 'video'],
           ['audioMessage', 'audio'], ['stickerMessage', 'sticker'],
@@ -2976,7 +3055,7 @@ async function startBot() {
                 chunks.push(chunk);
               }
               const buffer = Buffer.concat(chunks);
-              if (buffer.length && antiDeleteCacheBytes + buffer.length <= ANTI_DELETE_MAX_CACHE_BYTES) {
+              if (buffer.length && messageCache[messageId] === cacheEntry && antiDeleteCacheBytes + buffer.length <= ANTI_DELETE_MAX_CACHE_BYTES) {
                 cacheEntry.mediaMessage = true;
                 cacheEntry.mediaType = mediaInfo.type;
                 cacheEntry.buffer = buffer;
@@ -2990,7 +3069,6 @@ async function startBot() {
             }
           }
         }
-        messageCache[messageId] = cacheEntry;
         const cacheKeys = Object.keys(messageCache);
         while (cacheKeys.length > 100) {
           const oldest = cacheKeys.shift();
@@ -2999,6 +3077,8 @@ async function startBot() {
           delete messageCache[oldest];
         }
       }
+
+      await journaliserMessage(sock, msg);
 
       if (data.botPrivateMode === undefined) data.botPrivateMode = true;
 
