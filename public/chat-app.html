@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
   <title>Titan Chat - Dark Mode Ultra</title>
   <link rel="stylesheet" href="/chat.css" id="themeStylesheet">
   
@@ -27,7 +27,12 @@
 
     window.db = db;
     window.collection = collection;
-    window.addDoc = addDoc;
+    // Après chaque message privé envoyé, on prévient le serveur pour qu'il envoie la notification au destinataire
+    window.addDoc = async function (ref, data) {
+      const res = await addDoc(ref, data);
+      try { if (ref && ref.path === 'messages_pv' && typeof notifierDestinataireChat === 'function') notifierDestinataireChat(data); } catch (e) {}
+      return res;
+    };
     window.doc = doc;
     window.setDoc = setDoc;
     window.deleteDoc = deleteDoc;
@@ -67,6 +72,20 @@
     .sticker-msg { font-size: 2.5rem; padding: 4px; line-height: 1; }
     .audio-msg { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
   </style>
+<script>
+/* ⌨️ Clavier stable : la hauteur suit la zone réellement visible, et la page parente masque sa barre d'onglets pendant la saisie */
+(function () {
+  var vv = window.visualViewport, seul = window.self === window.top;
+  function ajuster() {
+    if (vv && seul) document.documentElement.style.setProperty('--vvh', vv.height + 'px');
+    window.scrollTo(0, 0);
+  }
+  if (vv) { vv.addEventListener('resize', ajuster); vv.addEventListener('scroll', ajuster); ajuster(); }
+  function clavier(ouvert) { if (!seul) try { parent.postMessage({ chatClavier: ouvert }, location.origin); } catch (e) {} }
+  document.addEventListener('focusin', function (e) { if (/^(INPUT|TEXTAREA)$/.test(e.target.tagName)) clavier(true); });
+  document.addEventListener('focusout', function () { setTimeout(function () { if (!/^(INPUT|TEXTAREA)$/.test((document.activeElement || {}).tagName || '')) clavier(false); }, 120); });
+})();
+</script>
 </head>
 <body class="glass" onload="verifierCookieID()">
 <div class="fond" aria-hidden="true"><i></i><i></i></div><div class="motif" aria-hidden="true"></div>
@@ -463,6 +482,7 @@ For vue qu'elle ne le sache pas ohh 😬</span>
     const savedID = lireCookie("titan_user_id");
     if (savedID) {
       monID = savedID;
+      synchroniserPushChat(false).catch(() => {});   // re-donne l'abonnement au serveur si les notifications sont déjà autorisées
       document.getElementById('displayName').textContent = monID;
       document.getElementById('screen-register').classList.add('hidden');
       document.getElementById('screen-menu').classList.remove('hidden');
@@ -540,6 +560,7 @@ For vue qu'elle ne le sache pas ohh 😬</span>
 
     monID = input;
     definirCookie("titan_user_id", monID, 30);
+    synchroniserPushChat(false).catch(() => {});
     document.getElementById('displayName').textContent = monID;
     document.getElementById('screen-register').classList.add('hidden');
     document.getElementById('screen-menu').classList.remove('hidden');
@@ -644,18 +665,57 @@ For vue qu'elle ne le sache pas ohh 😬</span>
     document.getElementById('screen-settings').classList.remove('hidden');
   }
 
-  function demanderPermissionNotification() {
-    if (!("Notification" in window)) {
-      alert("Ce navigateur ne gère pas les notifications.");
-      return;
+  /* 🔔 Notifications push : un message privé reçu arrive même quand l'appli est fermée */
+  function cleVapidBase64(s) {
+    const base = (s + '='.repeat((4 - s.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/');
+    const raw = atob(base), out = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+  // demander = true : on demande l'autorisation (bouton) ; false : on re-synchronise en silence si c'est déjà autorisé
+  async function synchroniserPushChat(demander) {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+      if (demander) throw new Error("Ce navigateur ne gère pas les notifications push.");
+      return false;
     }
-    Notification.requestPermission().then(permission => {
-      if (permission === "granted") {
-        alert("Notifications activées avec succès !");
-      } else {
-        alert("Permissions de notification refusées.");
-      }
+    if (!monID) throw new Error("Choisis d'abord ton ID.");
+    if (Notification.permission === 'default' && demander) await Notification.requestPermission();
+    if (Notification.permission !== 'granted') {
+      if (demander) throw new Error("Notifications refusées : autorise-les dans les réglages du navigateur.");
+      return false;
+    }
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const kr = await fetch('/api/chat/push/key');
+      const kd = await kr.json().catch(() => ({}));
+      if (!kr.ok) throw new Error(kd.erreur || "Notifications indisponibles sur le serveur.");
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: cleVapidBase64(kd.publicKey) });
+    }
+    const r = await fetch('/api/chat/push/subscribe', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: monID, subscription: sub.toJSON() })
     });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); throw new Error(d.erreur || "Enregistrement impossible."); }
+    return true;
+  }
+  function demanderPermissionNotification() {
+    synchroniserPushChat(true)
+      .then(() => alert("Notifications activées ! Tu recevras les messages privés même quand l'appli est fermée."))
+      .catch(e => alert(e && e.message ? e.message : "Erreur pendant l'activation."));
+  }
+  // Prévient le serveur qu'un message privé vient d'être envoyé (il notifie le destinataire)
+  function notifierDestinataireChat(data) {
+    if (!data || !data.destinataire || !data.expediteur || data.expediteur === data.destinataire) return;
+    let t = String(data.texte || '');
+    if (t.startsWith('[IMAGE:')) t = '📷 Photo';
+    else if (t.startsWith('[STICKER:')) t = '🏷️ Sticker';
+    else if (t.startsWith('[AUDIO:')) t = '🎤 Message vocal';
+    fetch('/api/chat/push/notifier', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, keepalive: true,
+      body: JSON.stringify({ de: data.expediteur, pour: data.destinataire, texte: t.slice(0, 100) })
+    }).catch(() => {});
   }
 
   function declencherNotificationNatif(titre, corps) {
@@ -966,37 +1026,74 @@ For vue qu'elle ne le sache pas ohh 😬</span>
     chargerMessagesPV();
   }
 
+  function echapperHTML(t) {
+    return String(t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  // « il y a 5 min » · « Aujourd'hui à 14:32 » · « Hier à 09:10 » · « ven. 7 nov. à 10:55 »
+  function dateDiscussion(d) {
+    const heure = d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    const debutJour = x => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const ecartJours = Math.round((debutJour(new Date()) - debutJour(d)) / 86400000);
+    const minutes = Math.floor((Date.now() - d.getTime()) / 60000);
+    if (minutes < 1) return "à l'instant";
+    if (minutes < 60) return `il y a ${minutes} min · ${heure}`;
+    if (ecartJours === 0) return `Aujourd'hui à ${heure}`;
+    if (ecartJours === 1) return `Hier à ${heure}`;
+    const jour = d.toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric', month: 'short', ...(ecartJours > 300 ? { year: 'numeric' } : {}) });
+    return `${jour} à ${heure}`;
+  }
+
+  function apercuDiscussion(data) {
+    let t = String(data.texte || '');
+    if (t.startsWith('[IMAGE:')) t = '📷 Photo';
+    else if (t.startsWith('[STICKER:')) t = '🏷️ Sticker';
+    else if (t.startsWith('[AUDIO:')) t = '🎤 Message vocal';
+    t = t.replace(/\s+/g, ' ').trim().slice(0, 70);
+    return (data.expediteur === monID ? 'Toi : ' : '') + t;
+  }
+
   function chargerDiscussionsRecentes() {
     const box = document.getElementById('recentChatsBox');
+    box.innerHTML = `<p style="text-align: center; color: var(--text-muted); margin-top: 20px;">Chargement…</p>`;
+    // Pas de tri côté serveur (il demanderait un index Firestore) : on trie ici, sur l'appareil.
     const q = window.query(
       window.collection(window.db, "messages_pv"),
-      window.where("participants", "array-contains", monID),
-      window.orderBy("timestamp", "desc")
+      window.where("participants", "array-contains", monID)
     );
 
     unsubscribePV = window.onSnapshot(q, (snapshot) => {
-      let amisSet = new Set();
-      snapshot.forEach(doc => {
-        const data = doc.data();
-        if (data.participants) {
-          const autre = data.participants.find(p => p !== monID);
-          if (autre) amisSet.add(autre);
-        }
+      const parAmi = new Map();   // ami -> dernier message
+      snapshot.forEach(docSnap => {
+        const data = docSnap.data();
+        const autre = (data.participants || []).find(p => p !== monID);
+        if (!autre) return;
+        const date = data.timestamp && data.timestamp.toDate ? data.timestamp.toDate() : new Date();   // message en cours d'envoi = maintenant
+        const prec = parAmi.get(autre);
+        if (!prec || date > prec.date) parAmi.set(autre, { date, apercu: apercuDiscussion(data) });
       });
 
       box.innerHTML = "";
-      if (amisSet.size === 0) {
+      if (parAmi.size === 0) {
         box.innerHTML = `<p style="text-align: center; color: var(--text-muted); margin-top: 20px;">Aucune discussion récente. Cherche un ami ci-dessus !</p>`;
         return;
       }
 
-      amisSet.forEach(ami => {
+      [...parAmi.entries()].sort((a, b) => b[1].date - a[1].date).forEach(([ami, info]) => {
         const div = document.createElement('div');
         div.className = "friend-item";
-        div.innerHTML = `<span>💬 <strong>${ami}</strong></span> <span style="color: var(--accent); font-size: 0.85rem;">Ouvrir →</span>`;
+        div.innerHTML = `
+          <div style="min-width: 0; flex: 1;">
+            <strong>💬 ${echapperHTML(ami)}</strong>
+            <div style="font-size: 0.8rem; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${echapperHTML(info.apercu)}</div>
+          </div>
+          <span style="font-size: 0.7rem; color: var(--accent); margin-left: 10px; text-align: right; white-space: nowrap;">${dateDiscussion(info.date)}</span>`;
         div.onclick = () => ouvrirChatPV(ami);
         box.appendChild(div);
       });
+    }, (erreur) => {
+      console.error('Discussions récentes :', erreur);
+      box.innerHTML = `<p style="text-align: center; color: var(--danger); margin-top: 20px;">Impossible de charger les discussions. Vérifie ta connexion et réessaie.</p>`;
     });
   }
 
@@ -1015,7 +1112,8 @@ For vue qu'elle ne le sache pas ohh 😬</span>
 
     let premierChargement = true;
     unsubscribeMessages = window.onSnapshot(q, (snapshot) => {
-      box.innerHTML = "";
+      const _proche = box.scrollHeight - box.scrollTop - box.clientHeight < 140, _top = box.scrollTop;   // l'utilisateur est-il en bas ?
+      const _frag = document.createElement('div');
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
         const isMe = data.expediteur === monID;
@@ -1046,9 +1144,11 @@ For vue qu'elle ne le sache pas ohh 😬</span>
           ${reactionHTML}
           <div class="msg-footer">${editedHTML} <span>${timeStr}</span> ${isMe ? '✞✞' : ''}</div>
         `;
-        box.appendChild(bubble);
+        _frag.appendChild(bubble);
       });
-      box.scrollTop = box.scrollHeight;
+      box.replaceChildren(..._frag.childNodes);
+      { const _der = snapshot.docs[snapshot.docs.length - 1];
+        if (premierChargement || _proche || (_der && _der.data().expediteur === monID)) box.scrollTop = box.scrollHeight; else box.scrollTop = _top; }
 
       if (!premierChargement && snapshot.docChanges().some(change => change.type === "added")) {
         const dernierChangement = snapshot.docChanges()[snapshot.docChanges().length - 1];
@@ -1220,7 +1320,9 @@ For vue qu'elle ne le sache pas ohh 😬</span>
 
     let premierChargement = true;
     unsubscribeMessages = window.onSnapshot(q, (snapshot) => {
-      box.innerHTML = `<div class="message-bubble other"><span class="msg-sender">🤖 Titan Bot</span><span class="msg-text">Bienvenue dans le salon ${codeSalon} ! Astuce : Tape <code>!8ball [ta question]</code> pour jouer.</span></div>`;
+      const _proche = box.scrollHeight - box.scrollTop - box.clientHeight < 140, _top = box.scrollTop;   // l'utilisateur est-il en bas ?
+      const _frag = document.createElement('div');
+      _frag.innerHTML = `<div class="message-bubble other"><span class="msg-sender">🤖 Titan Bot</span><span class="msg-text">Bienvenue dans le salon ${codeSalon} ! Astuce : Tape <code>!8ball [ta question]</code> pour jouer.</span></div>`;
       
       snapshot.forEach((docSnap) => {
         const data = docSnap.data();
@@ -1253,9 +1355,11 @@ For vue qu'elle ne le sache pas ohh 😬</span>
           ${reactionHTML}
           <div class="msg-footer">${editedHTML} <span>${timeStr}</span></div>
         `;
-        box.appendChild(bubble);
+        _frag.appendChild(bubble);
       });
-      box.scrollTop = box.scrollHeight;
+      box.replaceChildren(..._frag.childNodes);
+      { const _der = snapshot.docs[snapshot.docs.length - 1];
+        if (premierChargement || _proche || (_der && _der.data().expediteur === monID)) box.scrollTop = box.scrollHeight; else box.scrollTop = _top; }
 
       if (!premierChargement && snapshot.docChanges().some(change => change.type === "added")) {
         const dernierChangement = snapshot.docChanges()[snapshot.docChanges().length - 1];

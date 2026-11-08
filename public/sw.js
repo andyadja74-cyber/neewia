@@ -1,5 +1,5 @@
 // Service worker LEYBOTDY : réseau d'abord (toujours à jour), copie en secours si le réseau coupe. Les appels /api ne sont jamais mis en cache.
-const V = 'leybotdy-v4';
+const V = 'leybotdy-v5';
 const BASE = ['/offline.html', '/manifest.webmanifest', '/icon-192.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(BASE)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {
@@ -13,21 +13,26 @@ self.addEventListener('fetch', e => {
 });
 
 
-// 🔔 Réception des notifications envoyées uniquement aux abonnements admin.
+// 🔔 Réception des notifications : alertes admin et messages du chat.
 self.addEventListener('push', event => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; }
   catch (_) { data = { body: event.data ? event.data.text() : '' }; }
-  const title = data.title || 'LEYBOTDY';
-  const options = {
-    body: data.body || 'Une nouvelle activité nécessite ton attention.',
-    icon: '/icon-192.png',
-    badge: '/icon-192.png',
-    tag: data.tag || 'leybotdy-admin',
-    data: { url: data.url || '/admin' },
-    renotify: true
-  };
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil((async () => {
+    // Message du chat alors que l'appli est ouverte et au premier plan : le chat joue déjà son propre son/alerte
+    if (data.kind === 'chat') {
+      const fenetres = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+      if (fenetres.some(c => c.visibilityState === 'visible' && c.focused)) return;
+    }
+    await self.registration.showNotification(data.title || 'LEYBOTDY', {
+      body: data.body || 'Une nouvelle activité nécessite ton attention.',
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      tag: data.tag || 'leybotdy-admin',
+      data: { url: data.url || '/admin' },
+      renotify: true
+    });
+  })());
 });
 self.addEventListener('notificationclick', event => {
   event.notification.close();

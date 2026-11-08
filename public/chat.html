@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="color-scheme" content="dark">
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content"><meta name="color-scheme" content="dark">
 <link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#02050b">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="icon" href="/icon-192.png">
 <title>Chat · LEYBOTDY</title>
 <style>
 *{box-sizing:border-box;margin:0}
-html,body{height:100%}
+html,body{height:100%;overflow:hidden}
 body{display:flex;flex-direction:column;background:#02050b;color:#eaf6ff;font:16px/1.5 -apple-system,"SF Pro Display","Segoe UI",system-ui,sans-serif;overflow:hidden;padding-top:env(safe-area-inset-top)}
 iframe{flex:1;min-height:0;width:100%;border:0;background:#02050b}
 .tabbar{flex:none;display:flex;gap:6px;padding:7px;margin:8px auto max(12px,env(safe-area-inset-bottom));border-radius:28px;border:1px solid #ffffff4d;background:linear-gradient(160deg,#ffffff2a,#ffffff0d);box-shadow:inset 1.5px 1.5px 0 #ffffff80,inset -1px -1px 0 #ffffff1f,0 16px 44px #000a}
@@ -15,4 +15,17 @@ iframe{flex:1;min-height:0;width:100%;border:0;background:#02050b}
 </style></head><body>
 <iframe src="/chat-app.html" title="Chat" allow="microphone; camera; clipboard-write; notifications; autoplay; fullscreen"></iframe>
 <nav class="tabbar"><a href="/"><em>🏠</em>Accueil</a><a href="/#aide"><em>❓</em>Aide</a><a href="/chat" class="on"><em>💬</em>Chat</a><a href="/admin"><em>🔐</em>Admin</a></nav>
+<script>
+/* ⌨️ La page suit la zone visible (clavier ouvert = cadre plus court) et la barre d'onglets se cache pendant la saisie */
+(function () {
+  var vv = window.visualViewport, b = document.body;
+  function aj() { if (vv) b.style.height = vv.height + 'px'; window.scrollTo(0, 0); }
+  if (vv) { vv.addEventListener('resize', aj); vv.addEventListener('scroll', aj); aj(); }
+  addEventListener('message', function (e) {
+    if (e.origin !== location.origin || !e.data || typeof e.data.chatClavier !== 'boolean') return;
+    document.querySelector('.tabbar').style.display = e.data.chatClavier ? 'none' : 'flex';
+    setTimeout(aj, 60);
+  });
+})();
+</script>
 </body></html>
