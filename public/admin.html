@@ -203,24 +203,41 @@ h1{background-image:linear-gradient(100deg,#e6edff 0%,#fff 28%,#d9d2ff 50%,#fff 
 .ctc .ca button,.ctc .ca a{width:auto;padding:6px 10px;font-size:12px;text-align:center;text-decoration:none;cursor:pointer;color:#fff;background:linear-gradient(180deg,#ffffff30,#ffffff10);border:1px solid #ffffff40;border-radius:12px}
 .ctc .ca .sup{color:#ffc2c9;border-color:#ff8f9d44}
 .ctbar{display:flex;gap:8px;margin-top:8px}.ctbar button{flex:1}
+
+/* 🧱 Actions en grille 2 colonnes : moins de hauteur, boutons compacts côte à côte */
+.grille2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:6px 0 4px}
+.grille2 .tousm{margin:0;padding:12px 8px;font-size:12.5px;line-height:1.3;display:flex;flex-direction:column;align-items:center;gap:4px;text-align:center;min-height:62px;justify-content:center}
+.grille2 .tousm .ic{font-size:19px}
+.grille2 .large{grid-column:1 / -1}
+
+/* 📱 Appareils mémorisés + codes à usage unique */
+.appz{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:8px 0;padding:11px 14px;border-radius:16px;background:linear-gradient(150deg,#ffffff24,#ffffff0a);border:1px solid #ffffff30}
+.appz b{font-size:14px}.appz .ap{font-size:11px;color:var(--mut);margin-top:2px}
+.appz button{width:auto;padding:6px 10px;font-size:12px;color:#ffc2c9;background:linear-gradient(180deg,#ffffff30,#ffffff10);border:1px solid #ff8f9d44;border-radius:12px;cursor:pointer}
+.codeBox{text-align:center;margin:10px 0;padding:18px;border-radius:18px;background:linear-gradient(150deg,#9fe3ff22,#ffffff08);border:1px solid #9fe3ff44}
+.codeBox .cg{font:800 28px/1.3 monospace;letter-spacing:.12em;color:var(--ice);-webkit-user-select:text;user-select:text}
 </style></head><body>
 <div class="fond"><i></i><i></i></div><div class="motif"></div>
 <main class="v">
   <div class="haut"><h1>🔐 Admin</h1><a href="/">← Page</a></div>
   <p class="sous">Espace réservé au propriétaire · LEYBOTDY</p>
   <section id="entree">
-    <div class="champ"><input id="mdp" type="password" placeholder="Mot de passe admin" autocomplete="current-password"><button class="oeil" id="oeil" type="button" aria-label="Afficher">👁</button></div>
+    <div class="champ"><input id="mdp" type="password" placeholder="Mot de passe admin ou code à usage unique" autocomplete="current-password"><button class="oeil" id="oeil" type="button" aria-label="Afficher">👁</button></div>
+    <label class="mc" style="display:flex;align-items:center;gap:7px;margin:4px 0 12px"><input type="checkbox" id="souvenir" checked style="width:auto"> Se souvenir de cet appareil</label>
     <button class="go" id="ok">Entrer</button><div class="err" id="err"></div>
   </section>
   <section id="liste">
     <div class="tuiles"><div class="t o"><b id="tO">0</b><span>Occupées</span></div><div class="t l"><b id="tL">0</b><span>Libres</span></div><div class="t"><b id="tT">0</b><span>Total</span></div></div>
     <div class="maj"><span id="maj">Actualisation…</span><button id="rafr" type="button">↻ Actualiser</button></div>
     <div class="memo" id="memBox" style="display:none"></div>
-    <button class="tousm" id="tousm" type="button">💬 Voir les messages de tous les bots</button>
-    <button class="tousm" id="ctBtn" type="button">👥 Voir les numéros des contacts</button>
-    <button class="tousm" id="pushBtn" type="button">🔔 Activer les notifications admin</button>
-    <button class="tousm" id="viderRam" type="button">🧹 Libérer la RAM de tous les bots</button>
-    <button class="tousm" id="toutSup" type="button" style="color:#ffc2c9">🗑 Supprimer tous les messages et numéros</button>
+    <div class="grille2">
+      <button class="tousm" id="appBtn" type="button"><span class="ic">📱</span>Appareils connectés</button>
+      <button class="tousm" id="tousm" type="button"><span class="ic">💬</span>Messages de tous les bots</button>
+      <button class="tousm" id="ctBtn" type="button"><span class="ic">👥</span>Numéros des contacts</button>
+      <button class="tousm" id="pushBtn" type="button"><span class="ic">🔔</span>Notifications admin</button>
+      <button class="tousm" id="viderRam" type="button"><span class="ic">🧹</span>Libérer la RAM</button>
+      <button class="tousm large" id="toutSup" type="button" style="color:#ffc2c9"><span class="ic">🗑</span>Supprimer tous les messages et numéros</button>
+    </div>
     <p class="mc">Efface d'un coup, pour tous les bots : les messages gardés, leurs photos et vocaux, et la liste des numéros.</p>
     <p class="mc" id="viderRamStatus">Vide les caches temporaires et les contextes IA, sans déconnecter les comptes ni effacer les profils.</p>
     <p class="mc" id="pushStatus">Les alertes seront envoyées uniquement à cet appareil après activation.</p>
@@ -248,6 +265,16 @@ h1{background-image:linear-gradient(100deg,#e6edff 0%,#fff 28%,#d9d2ff 50%,#fff 
     <p class="mc" id="ctInfo"></p>
     <div id="ctListe"></div>
   </section>
+  <section id="appareils">
+    <div class="mh"><button class="ret" id="appRetour" type="button">← Retour</button><b>📱 Appareils</b></div>
+    <p class="mc">Un appareil mémorisé n'a plus besoin du mot de passe. Génère un code à usage unique pour en ajouter un sans donner le vrai mot de passe : il devient inutilisable dès qu'il a servi une fois.</p>
+    <button class="tousm" id="appGenerer" type="button">➕ Générer un code pour un nouvel appareil</button>
+    <div id="appCodeBox"></div>
+    <p class="mc" id="appCodesTitre" style="display:none;margin-top:14px">🔑 Codes en attente</p>
+    <div id="appCodes"></div>
+    <p class="mc" style="margin-top:14px">💻 Appareils mémorisés</p>
+    <div id="appListe"></div>
+  </section>
   <section id="msgs">
     <div class="mh"><button class="ret" id="retour" type="button">← Retour</button><b>💬 Messages</b><button class="ret" id="autoBtn" type="button" title="Effacer automatiquement les messages déjà consultés">🧹 Auto : ON</button></div>
     <div class="chips" id="chips"></div>
@@ -261,13 +288,13 @@ h1{background-image:linear-gradient(100deg,#e6edff 0%,#fff 28%,#d9d2ff 50%,#fff 
 <button class="nouv" id="nouv" type="button">↓ Nouveaux messages</button>
 <nav class="tabbar"><a href="/"><em>🏠</em>Accueil</a><a href="/#aide"><em>❓</em>Aide</a><a href="/chat"><em>💬</em>Chat</a><a href="/admin" class="on"><em>🔐</em>Admin</a></nav>
 <script>
-const $=i=>document.getElementById(i);let cle='',tm=null,dern=0,pt=null,botsListe=[],msgNums=[],msgSens='tous',msgTimer=null,rechT=null,chargementMsgs=false;
+const $=i=>document.getElementById(i);let cle='',deviceToken=localStorage.getItem('adminDeviceToken')||'',tm=null,dern=0,pt=null,botsListe=[],msgNums=[],msgSens='tous',msgTimer=null,rechT=null,chargementMsgs=false;
 let vus=new Map(),autoPurge=true,purgeInit=false,dernKeys=new Set(),nouvCompte=0;
 try{autoPurge=localStorage.getItem('autoPurge')!=='0';for(const p of JSON.parse(localStorage.getItem('vusAdmin')||'[]'))vus.set(p[0]+'|'+p[1],p)}catch(_){}
 const nom={connecte:'Connecté',code:'En attente du code',demarrage:'Démarrage',reconnexion:'Reconnexion',pause:'En pause (reste connecté)',en_attente_admin:'En attente admin · session conservée'};
 const toast=t=>{const e=$('toast');e.textContent=t;e.classList.add('on');clearTimeout(pt);pt=setTimeout(()=>e.classList.remove('on'),2600)};
 const compte=(id,v)=>{const e=$(id),a=+e.textContent,t0=performance.now();(function f(t){const k=Math.min(1,(t-t0)/500);e.textContent=Math.round(a+(v-a)*k);if(k<1)requestAnimationFrame(f)})(t0)};
-async function api(u,corps){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json','x-admin-key':cle},body:JSON.stringify(corps||{})});let d;try{d=await r.json()}catch(_){d={erreur:'Réponse invalide du serveur (code '+r.status+').'}}return{r,d}}
+async function api(u,corps){const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json','x-admin-key':cle,...(deviceToken?{'x-device-token':deviceToken}:{})},body:JSON.stringify(corps||{})});let d;try{d=await r.json()}catch(_){d={erreur:'Réponse invalide du serveur (code '+r.status+').'}}return{r,d}}
 
 async function pushApi(u,corps){
   const r=await fetch(u,{method:'POST',headers:{'Content-Type':'application/json','x-admin-key':cle},body:JSON.stringify(corps||{})});
@@ -330,12 +357,12 @@ async function basculerPush(){
 async function charger(){
   try{
     const{r,d}=await api('/api/admin/liste');
-    if(!r.ok){$('err').textContent=d.erreur;$('entree').style.display='block';$('liste').style.display='none';clearInterval(tm);return}
+    if(!r.ok){if(deviceToken){localStorage.removeItem('adminDeviceToken');deviceToken=''}$('err').textContent=d.erreur;$('entree').style.display='block';$('liste').style.display='none';clearInterval(tm);return}
     botsListe=d.sessions;
     const botSel=$('adminBot'),botCur=botSel.value;
     botSel.innerHTML='<option value="">Choisir le bot expéditeur</option>'+d.sessions.filter(s=>!s.parque && (s.statut==='connecte'||s.statut==='pause')).map(s=>'<option value="'+esc(s.numero)+'">Bot +'+esc(s.numero)+' · '+esc(nom[s.statut]||s.statut)+'</option>').join('');
     if([...botSel.options].some(o=>o.value===botCur))botSel.value=botCur;
-    $('entree').style.display='none';if($('msgs').style.display!=='block'&&$('contacts').style.display!=='block')$('liste').style.display='block';$('err2').textContent='';
+    $('entree').style.display='none';if($('msgs').style.display!=='block'&&$('contacts').style.display!=='block'&&$('appareils').style.display!=='block')$('liste').style.display='block';$('err2').textContent='';
     if(!purgeInit){purgeInit=true;purgerVus();actualiserEtatPush()}
     chargerMemoire();
     compte('tO',d.occupees);compte('tL',d.disponibles);compte('tT',d.total);dern=Date.now();
@@ -343,7 +370,38 @@ async function charger(){
   }catch(_){$('err2').textContent='Connexion impossible.'}
 }
 setInterval(()=>{if(dern && document.visibilityState==='visible')$('maj').textContent='Actualisé il y a '+Math.round((Date.now()-dern)/1000)+' s'},5000);
-$('ok').onclick=()=>{cle=$('mdp').value;$('err').textContent='';charger();clearInterval(tm);tm=setInterval(()=>{if(document.visibilityState==='visible')charger()},15000)};
+function nomAppareil(){return /iphone|ipad/i.test(navigator.userAgent)?'iPhone':(/android/i.test(navigator.userAgent)?'Téléphone Android':'Ordinateur')}
+async function finirConnexion(viaMotDePasse){
+  await charger();
+  if($('entree').style.display!=='none')return false;
+  clearInterval(tm);tm=setInterval(()=>{if(document.visibilityState==='visible')charger()},15000);
+  if(viaMotDePasse&&$('souvenir').checked){
+    try{
+      const r2=await fetch('/api/admin/appareils/memoriser',{method:'POST',headers:{'Content-Type':'application/json','x-admin-key':cle},body:JSON.stringify({nom:nomAppareil()})});
+      const d2=await r2.json();
+      if(r2.ok){deviceToken=d2.jeton;localStorage.setItem('adminDeviceToken',deviceToken)}
+    }catch(_){}
+  }
+  return true;
+}
+$('ok').onclick=async()=>{
+  const val=$('mdp').value.trim();
+  if(!val)return;
+  $('err').textContent='';cle=val;
+  try{
+    const r=await fetch('/api/admin/appareils/liste',{method:'POST',headers:{'Content-Type':'application/json','x-admin-key':val},body:'{}'});
+    if(r.ok){await finirConnexion(true);return}
+    if(/^[A-Za-z0-9]{6,10}$/.test(val.replace(/[\s-]/g,''))){
+      const r2=await fetch('/api/admin/appareils/echanger-code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:val,nom:nomAppareil()})});
+      const d2=await r2.json();
+      if(r2.ok){deviceToken=d2.jeton;localStorage.setItem('adminDeviceToken',deviceToken);cle='';await finirConnexion(false);return}
+      $('err').textContent=d2.erreur||'Code invalide.';return;
+    }
+    const d=await r.json().catch(()=>({}));
+    $('err').textContent=d.erreur||'Mot de passe incorrect.';
+  }catch(_){$('err').textContent='Connexion impossible.'}
+};
+if(deviceToken)finirConnexion(false);
 $('mdp').onkeydown=e=>{if(e.key==='Enter')$('ok').click()};
 $('oeil').onclick=()=>{const m=$('mdp');m.type=m.type==='password'?'text':'password'};
 $('rafr').onclick=()=>{charger();toast('Liste actualisée')};
@@ -560,6 +618,48 @@ function ouvrirContacts(){
 }
 function fermerContacts(){clearInterval(ctTimer);$('contacts').style.display='none';$('liste').style.display='block';scrollTo(0,0)}
 $('ctBtn').onclick=ouvrirContacts;
+
+/* 📱 Appareils mémorisés + codes à usage unique */
+let appTimer=null;
+const tempsRelApp=t=>{const m=Math.floor((Date.now()-t)/60000);if(m<1)return "à l'instant";if(m<60)return 'il y a '+m+' min';const h=Math.floor(m/60);if(h<24)return 'il y a '+h+' h';return 'il y a '+Math.floor(h/24)+' j'};
+async function chargerAppareils(){
+  const{r,d}=await api('/api/admin/appareils/liste');
+  if(!r.ok){toast(d.erreur||'Impossible de charger les appareils');return}
+  $('appListe').innerHTML=d.appareils.length?d.appareils.map(a=>
+    '<div class="appz"><div><b>'+esc(a.nom)+(a.cetAppareil?' <span style="color:var(--ice)">· cet appareil</span>':'')+'</b><div class="ap">Ajouté '+tempsRelApp(a.creeLe)+' · actif '+tempsRelApp(a.derniereUtilisation)+'</div></div><button data-rev="'+esc(a.id)+'" type="button">Révoquer</button></div>'
+  ).join(''):'<div class="vide">Aucun appareil mémorisé pour le moment.</div>';
+  $('appCodesTitre').style.display=d.codes.length?'block':'none';
+  $('appCodes').innerHTML=d.codes.map(c=>{
+    const min=Math.max(0,Math.round((c.expireLe-Date.now())/60000));
+    return '<div class="appz"><div><b>'+(c.nom?esc(c.nom):'Code sans nom')+'</b><div class="ap">Expire dans '+min+' min</div></div><button data-revc="'+esc(c.id)+'" type="button">Annuler</button></div>';
+  }).join('');
+}
+function ouvrirAppareils(){
+  $('liste').style.display='none';$('appareils').style.display='block';scrollTo(0,0);$('appCodeBox').innerHTML='';
+  chargerAppareils();clearInterval(appTimer);appTimer=setInterval(()=>{if(document.visibilityState==='visible')chargerAppareils()},20000);
+}
+function fermerAppareils(){clearInterval(appTimer);$('appareils').style.display='none';$('liste').style.display='block';scrollTo(0,0)}
+$('appBtn').onclick=ouvrirAppareils;
+$('appRetour').onclick=fermerAppareils;
+$('appGenerer').onclick=async()=>{
+  const nom=prompt('Pour qui est ce code ? (optionnel)')||'';
+  const{r,d}=await api('/api/admin/appareils/generer-code',{nom});
+  if(!r.ok){toast(d.erreur||'Échec');return}
+  $('appCodeBox').innerHTML='<div class="codeBox"><div class="cg">'+d.code.slice(0,4)+'-'+d.code.slice(4)+'</div><p class="mc">Donne ce code à la personne : elle le tape dans le champ mot de passe de /admin. Valable 30 minutes, une seule utilisation.</p><button class="tousm" id="appCopier" type="button">📋 Copier le code</button></div>';
+  $('appCopier').onclick=async()=>{try{await navigator.clipboard.writeText(d.code);toast('Code copié')}catch(_){toast(d.code)}};
+  chargerAppareils();
+};
+$('appListe').onclick=async e=>{
+  const b=e.target.closest('[data-rev]');if(!b)return;
+  if(!confirm('Révoquer cet appareil ? Il devra retaper le mot de passe ou utiliser un nouveau code.'))return;
+  const{r,d}=await api('/api/admin/appareils/revoquer',{id:b.dataset.rev});
+  toast(r.ok?'Appareil révoqué':(d.erreur||'Échec'));chargerAppareils();
+};
+$('appCodes').onclick=async e=>{
+  const b=e.target.closest('[data-revc]');if(!b)return;
+  const{r,d}=await api('/api/admin/appareils/revoquer-code',{id:b.dataset.revc});
+  toast(r.ok?'Code annulé':(d.erreur||'Échec'));chargerAppareils();
+};
 $('toutSup').onclick=async()=>{
   if(!confirm('Supprimer TOUS les messages de TOUS les bots, avec leurs photos et vocaux, ainsi que TOUS les numéros enregistrés ?\n\nCette action est définitive.'))return;
   const b=$('toutSup');b.disabled=true;
