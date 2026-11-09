@@ -359,6 +359,11 @@ async function emettreMessage(sock, msg) {
       conv = '👤 ' + libelleContact(jid, envoye ? null : msg.pushName, telChat);
       if (envoye && telChat && !telChat.endsWith('@lid')) numero = numeroDuJid(telChat);   // numéro du destinataire
     }
+    // 🔒 Le numéro du compte du bot lui-même (messages envoyés à soi-même : alertes anti-delete, vue unique…)
+    // ne doit jamais être enregistré comme contact : seul l'interlocuteur compte.
+    const monNum = String(sock?.user?.id || '').split(':')[0].split('@')[0];
+    const monLid = String(sock?.user?.lid || '').split(':')[0].split('@')[0];
+    const estMoi = (n) => !!n && [monNum, monLid].filter(Boolean).some(m => String(n).replace(/\D/g, '') === m);
     if (envoye) {
       de = '🤖 Bot';
     } else {
@@ -367,6 +372,7 @@ async function emettreMessage(sock, msg) {
       de = libelleContact(jidAuteur, msg.pushName, tel);
       numero = tel && !tel.endsWith('@lid') ? numeroDuJid(tel) : null;
     }
+    if (estMoi(numero)) numero = null;
     const t = msg.messageTimestamp ? lireTimestamp(msg.messageTimestamp) : Date.now();
     console.log('@@MSG@@' + JSON.stringify({ id: msg.key.id, t, sens: envoye ? 'envoye' : 'recu', groupe: estGroupe, conv, de, numero, type, texte, vue1: !!viewOnce, media }));
   } catch (e) { /* un message non lisible ne doit jamais gêner le bot */ }
@@ -633,7 +639,8 @@ async function identitesAcces(sock, msg, senderJid, isGroup) {
 // ═══════════════════════════════════════════════════════════
 const baileysLib = require('@whiskeysockets/baileys');
 const VU_AUTO = (process.env.VUE_UNIQUE_AUTO || 'on').trim().toLowerCase() !== 'off';
-const VU_DEST = (process.env.VUE_UNIQUE_DEST || 'chat').trim().toLowerCase();
+// 🔒 Confidentialité : les vues uniques interceptées vont toujours au compte du bot, jamais dans le chat d'origine.
+const VU_DEST = 'moi';
 const VU_DEBUG = ['1', 'true', 'on'].includes((process.env.VU_DEBUG || '').trim().toLowerCase());
 const VU_MAX_CACHE = 10; // moins d'éléments gardés car les vidéos pèsent lourd en mémoire
 const VU_MAX_OCTETS = 60 * 1024 * 1024; // au-delà, on ignore le fichier (protège la RAM de Render)
@@ -842,7 +849,9 @@ async function commandeVueUnique(sock, msg, remoteJid) {
   const ctx = content && content.extendedTextMessage && content.extendedTextMessage.contextInfo;
   const idCite = ctx && ctx.stanzaId;
   const citee = ctx && ctx.quotedMessage;
-  const repondre = (texte) => envoyerAvecDelai(sock, remoteJid, { text: texte }, { quoted: msg }, 'texte');
+  // 🔒 Tout part vers le compte du bot (confidentiel) : rien n'est affiché dans le chat où .v a été tapé.
+  const botNumber = sock.user.id.split(':')[0] + '@s.whatsapp.net';
+  const repondre = (texte) => envoyerAvecDelai(sock, botNumber, { text: texte }, {}, 'texte');
 
   let cache = idCite ? vueUniqueCache[idCite] : null;
 
@@ -870,15 +879,12 @@ async function commandeVueUnique(sock, msg, remoteJid) {
   }
 
   const nom = cache.expediteur ? (profilsJoueurs[cache.expediteur] || `@${cache.expediteur.split('@')[0]}`) : null;
-  const texte = `🔓 *VUE UNIQUE RÉCUPÉRÉE* 🥷${nom ? `\n👤 *Envoyée par :* ${nom}` : ''}`;
+  const origine = remoteJid.endsWith('@g.us') ? `Groupe : ${remoteJid.split('@')[0]}` : `Conversation : ${remoteJid.split('@')[0]}`;
+  const texte = `🔓 *VUE UNIQUE RÉCUPÉRÉE* 🥷${nom ? `\n👤 *Envoyée par :* ${nom}` : ''}\n💬 *Origine :* ${origine}`;
   // Un vocal ne peut pas avoir de légende : il part seul, sans message texte séparé
   let tampon;
   try { tampon = await tamponVue(cache); } catch (e) { await repondre("⚠️ Ce média n'est plus disponible (le bot a redémarré)."); return; }
-  if (cache.type === 'audio') {
-    await envoyerAvecDelai(sock, remoteJid, contenuMedia(cache, texte, tampon), {}, 'media');
-  } else {
-    await envoyerAvecDelai(sock, remoteJid, contenuMedia(cache, texte, tampon), { quoted: msg }, 'media');
-  }
+  await envoyerAvecDelai(sock, botNumber, contenuMedia(cache, texte, tampon), {}, 'media');
 }
 
 function installerVueUnique(sock) {
@@ -2926,7 +2932,7 @@ async function startBot() {
     if (!remoteJid) return;
     const sender = cachedMsg.sender || cible.participant || remoteJid;
     const senderName = profilsJoueurs[sender] || `@${String(sender).split('@')[0]}`;
-    const destination = ANTI_DELETE_DEST === 'chat' ? remoteJid : botNumber;
+    const destination = botNumber;   // 🔒 toujours le compte du bot, jamais le chat d'origine
     const chatLabel = remoteJid.endsWith('@g.us') ? `Groupe : ${remoteJid}` : `Conversation : ${remoteJid.split('@')[0]}`;
     const alertText = `🚨 *TITAN BOT — ANTI-DELETE*\n👤 *Auteur :* ${senderName}\n📱 *Numéro :* ${String(sender).split('@')[0]}\n💬 *Origine :* ${chatLabel}\n📅 *Date :* ${cachedMsg.fdate || 'Récemment'}\n`;
 
