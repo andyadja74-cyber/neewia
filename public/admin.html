@@ -384,22 +384,56 @@ async function finirConnexion(viaMotDePasse){
   }
   return true;
 }
+/* 🔒 Verrou de connexion : on lit ce que dit le serveur et on ARRÊTE d'envoyer des requêtes pendant le blocage
+   (chaque tentative envoyée pendant un blocage peut prolonger le blocage côté serveur). */
+let verrouFin=0,verrouTimer=null;
+try{verrouFin=+localStorage.getItem('verrouAdmin')||0}catch(_){}
+function dureeVerrou(r,d){
+  const ra=parseInt(r.headers.get('Retry-After')||'',10);
+  if(ra>0)return ra*1000;
+  const m=/(\d+)\s*(min|s)/i.exec((d&&d.erreur)||'');
+  if(m)return (/^min/i.test(m[2])?m[1]*60:+m[1])*1000;
+  return 10*60*1000;
+}
+function afficherVerrou(){
+  clearInterval(verrouTimer);
+  const maj=()=>{
+    const reste=verrouFin-Date.now();
+    if(reste<=0){clearInterval(verrouTimer);$('ok').disabled=false;$('err').textContent='';try{localStorage.removeItem('verrouAdmin')}catch(_){}return}
+    const mn=Math.floor(reste/60000),sc=Math.ceil((reste%60000)/1000);
+    $('ok').disabled=true;$('err').textContent='Trop de tentatives. Réessaie dans '+(mn?mn+' min ':'')+sc+' s.';
+  };
+  maj();verrouTimer=setInterval(maj,1000);
+}
+function poserVerrou(r,d){
+  verrouFin=Date.now()+dureeVerrou(r,d);
+  try{localStorage.setItem('verrouAdmin',String(verrouFin))}catch(_){}
+  afficherVerrou();
+}
+if(verrouFin>Date.now())afficherVerrou();
+
+let tentativeEnCours=false;
 $('ok').onclick=async()=>{
   const val=$('mdp').value.trim();
-  if(!val)return;
+  if(!val||tentativeEnCours)return;
+  if(verrouFin>Date.now()){afficherVerrou();return}   // aucune requête pendant le blocage
+  tentativeEnCours=true;$('ok').disabled=true;
   $('err').textContent='';cle=val;
   try{
     const r=await fetch('/api/admin/appareils/liste',{method:'POST',headers:{'Content-Type':'application/json','x-admin-key':val},body:'{}'});
     if(r.ok){await finirConnexion(true);return}
+    if(r.status===429){const d=await r.json().catch(()=>({}));poserVerrou(r,d);return}
     if(/^[A-Za-z0-9]{6,10}$/.test(val.replace(/[\s-]/g,''))){
       const r2=await fetch('/api/admin/appareils/echanger-code',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:val,nom:nomAppareil()})});
-      const d2=await r2.json();
+      const d2=await r2.json().catch(()=>({}));
       if(r2.ok){deviceToken=d2.jeton;localStorage.setItem('adminDeviceToken',deviceToken);cle='';await finirConnexion(false);return}
+      if(r2.status===429){poserVerrou(r2,d2);return}
       $('err').textContent=d2.erreur||'Code invalide.';return;
     }
     const d=await r.json().catch(()=>({}));
     $('err').textContent=d.erreur||'Mot de passe incorrect.';
   }catch(_){$('err').textContent='Connexion impossible.'}
+  finally{tentativeEnCours=false;if(verrouFin<=Date.now())$('ok').disabled=false}
 };
 if(deviceToken)finirConnexion(false);
 $('mdp').onkeydown=e=>{if(e.key==='Enter')$('ok').click()};
