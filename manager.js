@@ -28,6 +28,8 @@ let registre = { parrainages: {}, numeros: [], enPause: [], parkes: [], pushSubs
 try { registre = { ...registre, ...JSON.parse(fs.readFileSync(REGISTRE, 'utf8')) }; } catch (e) {}
 if (!Array.isArray(registre.pushSubscriptions)) registre.pushSubscriptions = [];
 if (!registre.chatPush || typeof registre.chatPush !== 'object' || Array.isArray(registre.chatPush)) registre.chatPush = {};   // abonnements push du chat : { idChat: [abonnements] }
+if (!Array.isArray(registre.appareils)) registre.appareils = [];   // téléphones mémorisés : plus besoin de retaper le mot de passe
+if (!Array.isArray(registre.codes)) registre.codes = [];           // codes à usage unique, pour mémoriser un nouvel appareil sans donner le vrai mot de passe
 const sauver = () => {
   registre.numeros = [...sessions.keys()];
   registre.enPause = [...sessions.values()].filter(s => s.statut === 'pause').map(s => s.numero);
@@ -392,17 +394,89 @@ app.get('/api/statut', (req, res) => {
 });
 
 // 🔐 ADMIN : réservé au propriétaire, protégé par le mot de passe de la variable ADMIN_MOT_DE_PASSE
+//   … ou par le jeton d'un appareil déjà mémorisé (voir plus bas), pour ne pas avoir à retaper le mot de passe à chaque fois.
 const ADMIN_MDP = (process.env.ADMIN_MOT_DE_PASSE || '').trim();
 const empreinte = (x) => crypto.createHash('sha256').update(String(x)).digest();
+const hacher = (x) => crypto.createHash('sha256').update(String(x)).digest('hex');
+const ALPHABET_CODE = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';   // sans 0/O/1/I, pour éviter les confusions en recopiant
+function genererCode(longueur) {
+  const octets = crypto.randomBytes(longueur);
+  let c = '';
+  for (let i = 0; i < longueur; i++) c += ALPHABET_CODE[octets[i] % ALPHABET_CODE.length];
+  return c;
+}
 const echecsAdmin = new Map();
 function admin(req, res, next) {
   if (!ADMIN_MDP) return res.status(503).json({ erreur: 'ADMIN_MOT_DE_PASSE n’est pas défini sur Render.' });
   const t = Date.now(), l = (echecsAdmin.get(req.ip) || []).filter(x => t - x < 600000);
   if (l.length >= 8) return res.status(429).json({ erreur: 'Trop d’essais. Réessaie dans 10 minutes.' });
+  const jetonAppareil = req.headers['x-device-token'];
+  if (jetonAppareil && typeof jetonAppareil === 'string') {
+    const h = hacher(jetonAppareil);
+    const appareil = registre.appareils.find(a => a.hash === h);
+    if (appareil) { appareil.derniereUtilisation = Date.now(); req.appareilId = appareil.id; return next(); }
+  }
   const ok = crypto.timingSafeEqual(empreinte(req.headers['x-admin-key'] || ''), empreinte(ADMIN_MDP));
   if (!ok) { l.push(t); echecsAdmin.set(req.ip, l); return res.status(401).json({ erreur: 'Mot de passe incorrect.' }); }
   next();
 }
+// 📱 APPAREILS MÉMORISÉS : une fois connecté, ce téléphone n'a plus besoin de retaper le mot de passe.
+app.post('/api/admin/appareils/liste', admin, (req, res) => {
+  registre.codes = registre.codes.filter(c => !c.utiliseLe && c.expireLe > Date.now());
+  res.json({
+    appareils: registre.appareils.map(a => ({ id: a.id, nom: a.nom, creeLe: a.creeLe, derniereUtilisation: a.derniereUtilisation, cetAppareil: a.id === req.appareilId })),
+    codes: registre.codes.map(c => ({ id: c.id, nom: c.nom, creeLe: c.creeLe, expireLe: c.expireLe }))
+  });
+});
+// Mémorise CET appareil (celui qui vient de taper le vrai mot de passe) : renvoie un jeton propre à lui, jamais le mot de passe lui-même.
+app.post('/api/admin/appareils/memoriser', admin, (req, res) => {
+  const t = Date.now(), jeton = crypto.randomBytes(32).toString('hex'), id = crypto.randomBytes(8).toString('hex');
+  registre.appareils.push({ id, hash: hacher(jeton), nom: String((req.body && req.body.nom) || '').slice(0, 40) || 'Cet appareil', creeLe: t, derniereUtilisation: t });
+  if (registre.appareils.length > 50) registre.appareils.shift();   // sécurité : pas de croissance infinie
+  sauver();
+  res.json({ ok: true, jeton });
+});
+app.post('/api/admin/appareils/revoquer', admin, (req, res) => {
+  const avant = registre.appareils.length;
+  registre.appareils = registre.appareils.filter(a => a.id !== (req.body && req.body.id));
+  if (registre.appareils.length === avant) return res.status(404).json({ erreur: 'Appareil introuvable.' });
+  sauver();
+  res.json({ ok: true });
+});
+// Code à usage unique : un admin déjà connecté en crée un et le transmet (vocalement, par un autre message…) à la personne
+// qui veut se connecter sans qu'on lui donne le vrai mot de passe. Valable 30 min, et redevient inutilisable dès qu'il a servi.
+app.post('/api/admin/appareils/generer-code', admin, (req, res) => {
+  registre.codes = registre.codes.filter(c => !c.utiliseLe && c.expireLe > Date.now());
+  if (registre.codes.length >= 20) return res.status(429).json({ erreur: 'Trop de codes en attente : annule-en un avant d’en créer un nouveau.' });
+  const code = genererCode(8), id = crypto.randomBytes(8).toString('hex'), t = Date.now();
+  registre.codes.push({ id, hash: hacher(code), nom: String((req.body && req.body.nom) || '').slice(0, 40), creeLe: t, expireLe: t + 30 * 60 * 1000, utiliseLe: null });
+  sauver();
+  res.json({ ok: true, code, expireLe: t + 30 * 60 * 1000 });
+});
+app.post('/api/admin/appareils/revoquer-code', admin, (req, res) => {
+  const avant = registre.codes.length;
+  registre.codes = registre.codes.filter(c => c.id !== (req.body && req.body.id));
+  if (registre.codes.length === avant) return res.status(404).json({ erreur: 'Code introuvable.' });
+  sauver();
+  res.json({ ok: true });
+});
+// Échange d'un code à usage unique contre un jeton d'appareil. Pas besoin du vrai mot de passe ici : c'est tout l'intérêt.
+const echecsCode = new Map();
+app.post('/api/admin/appareils/echanger-code', (req, res) => {
+  const t = Date.now(), l = (echecsCode.get(req.ip) || []).filter(x => t - x < 600000);
+  if (l.length >= 10) return res.status(429).json({ erreur: 'Trop d’essais, réessaie dans 10 minutes.' });
+  const saisi = String((req.body && req.body.code) || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const h = hacher(saisi);
+  const entree = registre.codes.find(c => c.hash === h);
+  if (!entree || entree.utiliseLe || entree.expireLe < t) { l.push(t); echecsCode.set(req.ip, l); return res.status(401).json({ erreur: 'Code invalide, déjà utilisé ou expiré.' }); }
+  entree.utiliseLe = t;
+  const jeton = crypto.randomBytes(32).toString('hex'), id = crypto.randomBytes(8).toString('hex');
+  registre.appareils.push({ id, hash: hacher(jeton), nom: entree.nom || String((req.body && req.body.nom) || '').slice(0, 40) || 'Nouvel appareil', creeLe: t, derniereUtilisation: t });
+  if (registre.appareils.length > 50) registre.appareils.shift();
+  sauver();
+  res.json({ ok: true, jeton });
+});
+
 app.get('/chat', (req, res) => res.sendFile(path.join(__dirname, 'public', 'chat.html')));
 app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
 
