@@ -2839,9 +2839,13 @@ async function startBot() {
     const { state, saveCreds, clearSession } = await getAuthState();
     const { version } = await fetchLatestBaileysVersion();
 
+    // 🔁 Mémoire des derniers messages envoyés : quand un téléphone n'arrive pas à déchiffrer un message
+    // (« En attente de ce message… »), il demande un renvoi ; sans cette mémoire le bot ne peut pas le renvoyer.
+    const messagesEnvoyes = (globalThis.__messagesEnvoyes ||= new Map());
     socketLocal = makeWASocket({
       version,
       auth: state,
+      getMessage: async (key) => messagesEnvoyes.get(key?.id)?.message || undefined,
       logger: pino({ level: 'silent' }),
       printQRInTerminal: false,
       browser: Browsers.ubuntu('Chrome'),
@@ -2857,6 +2861,12 @@ async function startBot() {
       const envoyerOrigine = socketLocal.sendMessage.bind(socketLocal);
       socketLocal.sendMessage = async (...args) => {
         const r = await envoyerOrigine(...args);
+        try {
+          if (r?.key?.id && r.message) {
+            messagesEnvoyes.set(r.key.id, r);
+            if (messagesEnvoyes.size > 300) messagesEnvoyes.delete(messagesEnvoyes.keys().next().value);
+          }
+        } catch (e) {}
         emettreMessage(socketLocal, r);
         return r;
       };
