@@ -200,6 +200,11 @@ const TYPES_MESSAGE = {
 function memoriserContact(c) {
   if (!c || !c.id) return;
   const actuel = contactsConnus.get(c.id) || {};
+  // 📞 Les contacts WhatsApp récents donnent aussi la correspondance LID <-> numéro
+  try {
+    if (c.id.endsWith('@lid') && c.phoneNumber) memoriserNumero(c.id, String(c.phoneNumber).includes('@') ? c.phoneNumber : c.phoneNumber + '@s.whatsapp.net');
+    if (c.id.endsWith('@s.whatsapp.net') && c.lid) memoriserNumero(String(c.lid).includes('@') ? c.lid : c.lid + '@lid', c.id);
+  } catch (e) {}
   contactsConnus.set(c.id, {
     nom: c.name || c.verifiedName || actuel.nom || null,   // nom enregistré dans ton téléphone
     pseudo: c.notify || actuel.pseudo || null               // nom de profil choisi par la personne
@@ -307,26 +312,45 @@ async function journaliserMessage(sock, msg, { muet = false } = {}) {
 // 🖼️🎤 Médias pour la page admin : les images et vocaux (reçus ET envoyés) sont gardés sur le disque du bot
 // (dossier medias/, effacés par le gestionnaire quand le message sort de la liste). Désactivable : MEDIAS_ADMIN=off
 const MEDIAS_ADMIN = (process.env.MEDIAS_ADMIN || 'on').trim().toLowerCase() !== 'off';
-const MEDIA_IMAGE_MAX = 2.5 * 1024 * 1024, MEDIA_AUDIO_MAX = 1.5 * 1024 * 1024;
+const MEDIA_IMAGE_MAX = 2.5 * 1024 * 1024, MEDIA_AUDIO_MAX = 1.5 * 1024 * 1024, MEDIA_VIDEO_MAX = 50 * 1024 * 1024;
 async function sauverMediaAdmin(sock, msg, m, cle) {
-  const type = cle === 'audioMessage' ? 'audio' : cle === 'stickerMessage' ? 'sticker' : 'image';
+  const type = cle === 'audioMessage' ? 'audio' : cle === 'stickerMessage' ? 'sticker' : cle === 'videoMessage' ? 'video' : 'image';
   const mime = String(m.mimetype || '');
   const info = { type, mime, d: Number(m.seconds) || 0 };
   try {
-    if (type === 'image' && m.jpegThumbnail) {
+    if ((type === 'image' || type === 'video') && m.jpegThumbnail) {
       const mini = Buffer.from(m.jpegThumbnail);
       if (mini.length && mini.length <= 12000) info.mini = 'data:image/jpeg;base64,' + mini.toString('base64');
     }
   } catch (e) {}
   const dossier = process.env.AUTH_DIR ? path.join(process.env.AUTH_DIR, 'medias') : null;
-  const max = type === 'audio' ? MEDIA_AUDIO_MAX : MEDIA_IMAGE_MAX;
+  const max = type === 'audio' ? MEDIA_AUDIO_MAX : type === 'video' ? MEDIA_VIDEO_MAX : MEDIA_IMAGE_MAX;
   const taille = Number(m.fileLength && m.fileLength.toString ? m.fileLength.toString() : m.fileLength) || 0;
   if (!dossier || (taille && taille > max)) return info;
   try {
+    if (type === 'video') {   // flux direct vers le disque : jamais 50 Mo en mémoire (le bot n'a que ~110 Mo de tas)
+      const idV = String(msg.key.id || Date.now()).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60) || String(Date.now());
+      const extV = /webm/i.test(mime) ? 'webm' : /3gpp/i.test(mime) ? '3gp' : 'mp4';
+      const cheminV = path.join(dossier, idV + '.' + extV);
+      await fs.promises.mkdir(dossier, { recursive: true });
+      const flux = await downloadContentFromMessage(m, 'video');
+      const sortie = fs.createWriteStream(cheminV);
+      let total = 0, depasse = false;
+      try {
+        for await (const morceau of flux) {
+          total += morceau.length;
+          if (total > max) { depasse = true; break; }
+          if (!sortie.write(morceau)) await new Promise(ok => sortie.once('drain', ok));
+        }
+      } finally { await new Promise(ok => sortie.end(ok)); }
+      if (depasse || !total) { await fs.promises.rm(cheminV, { force: true }); return info; }
+      info.f = idV + '.' + extV; info.s = total;
+      return info;
+    }
     const buffer = await telechargerMedia(sock, m, type, msg.key);
     if (!buffer || buffer.length > max) return info;
     const ext = /ogg|opus/i.test(mime) ? 'ogg' : /mpeg|mp3/i.test(mime) ? 'mp3' : /mp4|m4a|aac/i.test(mime) ? 'm4a'
-      : /png/i.test(mime) ? 'png' : /webp/i.test(mime) ? 'webp' : (type === 'audio' ? 'ogg' : 'jpg');
+      : /png/i.test(mime) ? 'png' : /webp/i.test(mime) ? 'webp' : /webm/i.test(mime) ? 'webm' : /3gpp/i.test(mime) ? '3gp' : (type === 'audio' ? 'ogg' : type === 'video' ? 'mp4' : 'jpg');
     const id = String(msg.key.id || Date.now()).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 60) || String(Date.now());
     await fs.promises.mkdir(dossier, { recursive: true });
     await fs.promises.writeFile(path.join(dossier, id + '.' + ext), buffer);
@@ -349,13 +373,23 @@ async function emettreMessage(sock, msg) {
     const type = TYPES_MESSAGE[cle] || cle;
     const corps = content.conversation || content.extendedTextMessage?.text || content[cle]?.caption || '';
     const texte = corps.replace(/\s+/g, ' ').trim().slice(0, 500);
-    const media = (MEDIAS_ADMIN && ['imageMessage', 'audioMessage', 'stickerMessage'].includes(cle)) ? await sauverMediaAdmin(sock, msg, content[cle], cle) : null;
+    const media = (MEDIAS_ADMIN && ['imageMessage', 'audioMessage', 'stickerMessage', 'videoMessage'].includes(cle)) ? await sauverMediaAdmin(sock, msg, content[cle], cle) : null;
 
+    // 📞 Toutes les formes d'« autre identifiant » que WhatsApp peut fournir (selon la version de Baileys)
+    const altPrive = msg.key.remoteJidAlt || msg.key.senderPn || null;
+    const altGroupe = msg.key.participantAlt || msg.key.participantPn || null;
+    memoriserNumero(jid, altPrive); memoriserNumero(msg.key.participant, altGroupe);
+    const resoudre = async (j, alt) => {
+      let r = await numeroReel(sock, j, alt);
+      if (!r && j && j.endsWith('@lid')) { await new Promise(ok => setTimeout(ok, 1500)); r = await numeroReel(sock, j, alt); }   // la correspondance arrive parfois juste après
+      if (!r && j && j.endsWith('@lid')) console.log(`[ADMIN] ⚠️ Numéro introuvable pour l'identifiant …${j.split('@')[0].slice(-6)} (WhatsApp ne l'a pas fourni)`);
+      return r;
+    };
     let conv, de, numero = null;
     if (estGroupe) {
       conv = '👥 ' + await nomGroupe(sock, jid);
     } else {
-      const telChat = await numeroReel(sock, jid, msg.key.remoteJidAlt);
+      const telChat = await resoudre(jid, altPrive);
       conv = '👤 ' + libelleContact(jid, envoye ? null : msg.pushName, telChat);
       if (envoye && telChat && !telChat.endsWith('@lid')) numero = numeroDuJid(telChat);   // numéro du destinataire
     }
@@ -368,7 +402,7 @@ async function emettreMessage(sock, msg) {
       de = '🤖 Bot';
     } else {
       const jidAuteur = estGroupe ? msg.key.participant : jid;
-      const tel = await numeroReel(sock, jidAuteur, estGroupe ? msg.key.participantAlt : msg.key.remoteJidAlt);
+      const tel = await resoudre(jidAuteur, estGroupe ? altGroupe : altPrive);
       de = libelleContact(jidAuteur, msg.pushName, tel);
       numero = tel && !tel.endsWith('@lid') ? numeroDuJid(tel) : null;
     }

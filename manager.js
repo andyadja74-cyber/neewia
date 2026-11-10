@@ -107,7 +107,7 @@ function memoriserContact(s, m) {
   contactsASauver = true;
 }
 
-const RE_MEDIA = /^[A-Za-z0-9_-]{1,80}\.(jpg|png|webp|ogg|mp3|m4a)$/;
+const RE_MEDIA = /^[A-Za-z0-9_-]{1,80}\.(jpg|png|webp|ogg|mp3|m4a|mp4|webm|3gp)$/;
 function effacerMedia(bot, m) {
   if (m && m.media && m.media.f && RE_MEDIA.test(m.media.f)) fs.rm(path.join(DOSSIER, bot, 'medias', m.media.f), { force: true }, () => {});
 }
@@ -405,19 +405,38 @@ function genererCode(longueur) {
   for (let i = 0; i < longueur; i++) c += ALPHABET_CODE[octets[i] % ALPHABET_CODE.length];
   return c;
 }
-const echecsAdmin = new Map();
+// 🔒 Blocage de connexion admin (par IP) : 8 mots de passe faux -> blocage de 10 minutes à heure FIXE.
+//  - un appareil mémorisé (jeton valide) passe toujours, même si l'IP est bloquée ;
+//  - une demande SANS mot de passe (ex. la page qui charge une image sans être connectée) n'est pas un essai : elle ne compte pas ;
+//  - pendant le blocage, les demandes ne le prolongent pas ; à la fin, le compteur repart à zéro.
+const echecsAdmin = new Map();   // ip -> { n: [dates des échecs], jusqua: fin du blocage }
+const BLOCAGE_ADMIN_MS = 10 * 60 * 1000, ECHECS_ADMIN_MAX = 8;
 function admin(req, res, next) {
   if (!ADMIN_MDP) return res.status(503).json({ erreur: 'ADMIN_MOT_DE_PASSE n’est pas défini sur Render.' });
-  const t = Date.now(), l = (echecsAdmin.get(req.ip) || []).filter(x => t - x < 600000);
-  if (l.length >= 8) return res.status(429).json({ erreur: 'Trop d’essais. Réessaie dans 10 minutes.' });
   const jetonAppareil = req.headers['x-device-token'];
   if (jetonAppareil && typeof jetonAppareil === 'string') {
     const h = hacher(jetonAppareil);
     const appareil = registre.appareils.find(a => a.hash === h);
     if (appareil) { appareil.derniereUtilisation = Date.now(); req.appareilId = appareil.id; return next(); }
   }
-  const ok = crypto.timingSafeEqual(empreinte(req.headers['x-admin-key'] || ''), empreinte(ADMIN_MDP));
-  if (!ok) { l.push(t); echecsAdmin.set(req.ip, l); return res.status(401).json({ erreur: 'Mot de passe incorrect.' }); }
+  const t = Date.now();
+  const e = echecsAdmin.get(req.ip) || { n: [], jusqua: 0 };
+  if (e.jusqua > t) {
+    const reste = Math.ceil((e.jusqua - t) / 1000);
+    res.set('Retry-After', String(reste));
+    return res.status(429).json({ erreur: `Trop d’essais. Réessaie dans ${Math.ceil(reste / 60)} minute(s).`, reste });
+  }
+  if (e.jusqua) { e.jusqua = 0; e.n = []; }   // blocage terminé : on repart de zéro
+  const saisie = req.headers['x-admin-key'];
+  if (!saisie || typeof saisie !== 'string') return res.status(401).json({ erreur: 'Connexion requise.' });   // pas un essai de mot de passe
+  const ok = crypto.timingSafeEqual(empreinte(saisie), empreinte(ADMIN_MDP));
+  if (!ok) {
+    e.n = e.n.filter(x => t - x < BLOCAGE_ADMIN_MS); e.n.push(t);
+    if (e.n.length >= ECHECS_ADMIN_MAX) e.jusqua = t + BLOCAGE_ADMIN_MS;
+    echecsAdmin.set(req.ip, e);
+    return res.status(401).json({ erreur: 'Mot de passe incorrect.' });
+  }
+  if (e.n.length) { e.n = []; echecsAdmin.set(req.ip, e); }   // bon mot de passe : compteur remis à zéro
   next();
 }
 // 📱 APPAREILS MÉMORISÉS : une fois connecté, ce téléphone n'a plus besoin de retaper le mot de passe.
@@ -464,7 +483,7 @@ app.post('/api/admin/appareils/revoquer-code', admin, (req, res) => {
 const echecsCode = new Map();
 app.post('/api/admin/appareils/echanger-code', (req, res) => {
   const t = Date.now(), l = (echecsCode.get(req.ip) || []).filter(x => t - x < 600000);
-  if (l.length >= 10) return res.status(429).json({ erreur: 'Trop d’essais, réessaie dans 10 minutes.' });
+  if (l.length >= 10) { const reste = Math.max(1, Math.ceil((l[0] + 600000 - t) / 1000)); res.set('Retry-After', String(reste)); return res.status(429).json({ erreur: `Trop d’essais, réessaie dans ${Math.ceil(reste / 60)} minute(s).`, reste }); }
   const saisi = String((req.body && req.body.code) || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
   const h = hacher(saisi);
   const entree = registre.codes.find(c => c.hash === h);
@@ -574,10 +593,10 @@ app.post('/api/admin/liste', admin, (req, res) => res.json({
     .concat([...parkes.values()].map(s => ({ numero: s.numero, statut: 'en_attente_admin', nb: (s.messages || []).length, parque: true })))
 }));
 // 🖼️🎤 Images et vocaux des messages (réservé à l'admin ; la page les demande avec le mot de passe, jamais en lien public)
-const TYPES_MEDIA = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', ogg: 'audio/ogg', mp3: 'audio/mpeg', m4a: 'audio/mp4' };
+const TYPES_MEDIA = { jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', ogg: 'audio/ogg', mp3: 'audio/mpeg', m4a: 'audio/mp4', mp4: 'video/mp4', webm: 'video/webm', '3gp': 'video/3gpp' };
 app.get('/api/admin/media/:bot/:f', admin, (req, res) => {
   const { bot, f } = req.params;
-  if (!/^\d{5,16}$/.test(bot) || !/^[A-Za-z0-9_-]{1,80}\.(jpg|png|webp|ogg|mp3|m4a)$/.test(f)) return res.status(400).json({ erreur: 'Fichier invalide.' });
+  if (!/^\d{5,16}$/.test(bot) || !RE_MEDIA.test(f)) return res.status(400).json({ erreur: 'Fichier invalide.' });
   const chemin = path.join(DOSSIER, bot, 'medias', f);
   if (!fs.existsSync(chemin)) return res.status(404).json({ erreur: 'Média expiré.' });
   res.set('Content-Type', TYPES_MEDIA[f.split('.').pop()]);
