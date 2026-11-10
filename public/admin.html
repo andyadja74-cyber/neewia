@@ -341,7 +341,7 @@ async function basculerPush(){
       let permission=Notification.permission;
       if(permission==='default')permission=await Notification.requestPermission();
       if(permission!=='granted')throw new Error('Autorise les notifications dans les réglages du navigateur.');
-      const kr=await fetch('/api/admin/push/key',{headers:{'x-admin-key':cle}});
+      const kr=await fetch('/api/admin/push/key',{headers:{'x-admin-key':cle,...(deviceToken?{'x-device-token':deviceToken}:{})}});
       const kd=await kr.json();
       if(!kr.ok)throw new Error(kd.erreur||'Clé push indisponible.');
       sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:cleVapidBase64(kd.publicKey)});
@@ -554,7 +554,7 @@ async function chargerMsgs(){
 let derSig='',io=null;const blobs=new Map();
 async function blobMedia(u){
   if(blobs.has(u))return blobs.get(u);
-  try{const r=await fetch('/api/admin/media/'+u,{headers:{'x-admin-key':cle}});if(!r.ok)return null;const b=URL.createObjectURL(await r.blob());blobs.set(u,b);return b}catch(_){return null}
+  try{const r=await fetch('/api/admin/media/'+u,{headers:{'x-admin-key':cle,...(deviceToken?{'x-device-token':deviceToken}:{})}});if(!r.ok)return null;const b=URL.createObjectURL(await r.blob());blobs.set(u,b);return b}catch(_){return null}
 }
 const dur=s=>s?Math.floor(s/60)+':'+String(Math.round(s%60)).padStart(2,'0'):'';
 function rendreChat(liste,multi){
@@ -582,6 +582,8 @@ function rendreChat(liste,multi){
       if(!env&&m.groupe)c+='<div class="nm">'+esc(m.de)+'</div>';
       if(md&&md.type==='audio'){
         c+=md.f?'<button class="vox" type="button" data-u="'+esc(g.bot+'/'+md.f)+'">▶ Vocal'+(md.d?' · '+dur(md.d):'')+'</button>':'<div class="nc">🎤 Vocal'+(md.d?' · '+dur(md.d):'')+' (non conservé)</div>';
+      }else if(md&&md.type==='video'){
+        c+=md.f?'<button class="vox vid" type="button" data-u="'+esc(g.bot+'/'+md.f)+'">🎬 ▶ Vidéo'+(md.d?' · '+dur(md.d):'')+(md.s?' · '+(md.s/1048576).toFixed(1)+' Mo':'')+'</button>':'<div class="nc">🎬 Vidéo'+(md.d?' · '+dur(md.d):'')+' (non conservée)</div>';
       }else if(md){
         const src=md.mini||'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
         if(md.f||md.mini)c+='<div class="im'+(md.type==='sticker'?' st':'')+'"'+(md.f?' data-u="'+esc(g.bot+'/'+md.f)+'"':'')+'><img src="'+esc(src)+'" class="'+(md.f?'flou':'')+'" alt="image"></div>';
@@ -614,6 +616,13 @@ $('mlist').addEventListener('click',async e=>{
     if(r.ok){toast('Message supprimé');derSig='';await chargerMsgs()}
     else{del.disabled=false;del.textContent='🗑 Delete';toast(d.erreur||'Suppression impossible')}
     return;
+  }
+  const vd=e.target.closest('.vid');
+  if(vd){
+    vd.disabled=true;vd.textContent='Chargement…';
+    const b=await blobMedia(vd.dataset.u);
+    if(!b){vd.textContent='Média expiré';return}
+    const el=document.createElement('video');el.controls=true;el.autoplay=true;el.playsInline=true;el.src=b;el.style.cssText='max-width:100%;border-radius:12px;display:block';vd.replaceWith(el);return;
   }
   const v=e.target.closest('.vox');
   if(v){
