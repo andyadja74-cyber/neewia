@@ -12,6 +12,10 @@ iframe{flex:1;min-height:0;width:100%;border:0;background:#03060d}
 .tabbar a{display:flex;flex-direction:column;align-items:center;gap:2px;min-width:78px;padding:8px 14px;border-radius:21px;font:600 11px/1.2 -apple-system,system-ui,sans-serif;color:#d3dcee;text-decoration:none;transition:.25s;cursor:pointer}
 .tabbar a em{font-style:normal;font-size:20px}.tabbar a:active{transform:scale(.94)}
 .tabbar a.on{color:#fff;background:linear-gradient(160deg,#ffffff4d,#ffffff14);box-shadow:inset 1px 1px 0 #ffffffaa,0 0 18px #ffffff22}
+
+.tabbar{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:linear-gradient(145deg,rgba(255,255,255,.23),rgba(255,255,255,.07))!important;border:1px solid rgba(240,249,255,.4)!important;box-shadow:inset 1px 1px 0 rgba(255,255,255,.48),0 10px 26px rgba(0,8,25,.35)!important}
+.tabbar a.on{background:linear-gradient(145deg,rgba(255,255,255,.28),rgba(255,255,255,.09))!important;box-shadow:inset 1px 1px 0 rgba(255,255,255,.45)!important}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 </style></head><body>
 <iframe src="/chat-app.html" title="Chat" allow="microphone; camera; clipboard-write; notifications; autoplay; fullscreen"></iframe>
 <nav class="tabbar"><a href="/"><em>🏠</em>Accueil</a><a href="/#aide"><em>❓</em>Aide</a><a href="/chat" class="on"><em>💬</em>Chat</a><a href="/admin"><em>🔐</em>Admin</a></nav>

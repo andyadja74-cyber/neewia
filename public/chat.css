@@ -423,3 +423,42 @@ body:not(#_) .chat-image{border-radius:18px}
 body:not(#_) .msg-action-btn,body:not(#_) .emoji-btn,body:not(#_) .sticker-btn{background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.25);border-radius:999px;box-shadow:inset 1px 1px 1px rgba(255,255,255,.5);backdrop-filter:none;-webkit-backdrop-filter:none}
 body:not(#_) [style*="--header-bg"]{background:linear-gradient(160deg,rgba(255,255,255,.2),rgba(255,255,255,.05))!important;border-color:rgba(255,255,255,.28)!important;backdrop-filter:blur(10px) saturate(170%);-webkit-backdrop-filter:blur(10px) saturate(170%);border-radius:22px}
 body:not(#_) #screen-pv-list>div[style*="--header-bg"]{border-radius:0 0 22px 22px}
+
+
+/* LEYBOTDY · LIQUID CRYSTAL GLASS — rendu léger, sans flou GPU */
+:root{--glass-level:58;--glass-alpha:calc(.025 + var(--glass-level)*.00115);--glass-edge:rgba(230,248,255,.34);--glass-highlight:rgba(255,255,255,.48)}
+html{background:#050b18!important}
+html::before{z-index:-2!important;background:radial-gradient(75% 55% at 8% 0%,rgba(75,126,255,.22),transparent 68%),radial-gradient(65% 48% at 100% 18%,rgba(173,106,255,.18),transparent 70%),radial-gradient(65% 55% at 45% 100%,rgba(61,222,218,.13),transparent 72%),linear-gradient(145deg,#071225,#030711 70%)!important}
+html::after,body::before,body::after{display:none!important;animation:none!important}
+body.glass{background:transparent!important}
+body.glass .app-container,body:not(#_) .app-container{
+  background:linear-gradient(145deg,rgba(255,255,255,calc(.06 + var(--glass-level)*.0012)),rgba(255,255,255,.025) 48%,rgba(115,174,255,.055))!important;
+  border:1px solid var(--glass-edge)!important;border-radius:28px;
+  box-shadow:inset 1px 1px 0 var(--glass-highlight),inset -1px -1px 0 rgba(140,205,255,.12),0 18px 46px rgba(0,5,20,.42)!important;
+  backdrop-filter:none!important;-webkit-backdrop-filter:none!important;isolation:isolate
+}
+body.glass .app-container::before,body.glass .app-container::after,body:not(#_) .app-container::before,body:not(#_) .app-container::after{display:none!important;animation:none!important}
+body.glass .dashboard-header,body.glass .input-chat-row,body.glass .reply-banner,
+body:not(#_) .dashboard-header,body:not(#_) .input-chat-row,body:not(#_) .reply-banner,
+body:not(#_) .sticker-picker-container,body:not(#_) .menu-options{
+  background:linear-gradient(145deg,rgba(255,255,255,calc(.055 + var(--glass-level)*.0011)),rgba(255,255,255,.035))!important;
+  border:1px solid rgba(235,247,255,.22)!important;box-shadow:inset 1px 1px 0 rgba(255,255,255,.3)!important;
+  backdrop-filter:none!important;-webkit-backdrop-filter:none!important
+}
+body.glass .message-bubble,body.glass .friend-item,body:not(#_) .message-bubble,body:not(#_) .friend-item{
+  background:linear-gradient(145deg,rgba(255,255,255,calc(.045 + var(--glass-level)*.00105)),rgba(255,255,255,.035) 58%,rgba(110,166,255,.055))!important;
+  border:1px solid rgba(235,247,255,.24)!important;border-radius:19px!important;
+  box-shadow:inset 1px 1px 0 rgba(255,255,255,.28),0 5px 14px rgba(0,5,20,.16)!important;
+  backdrop-filter:none!important;-webkit-backdrop-filter:none!important;animation:none!important
+}
+body.glass .message-bubble.me,body:not(#_) .message-bubble.me{background:linear-gradient(145deg,rgba(116,174,255,.27),rgba(135,117,255,.13))!important;border-color:rgba(178,213,255,.38)!important}
+body.glass .message-bubble.other,body:not(#_) .message-bubble.other{background:linear-gradient(145deg,rgba(255,255,255,.12),rgba(255,255,255,.045))!important}
+body.glass input,body.glass textarea,body.glass select,body:not(#_) input,body:not(#_) textarea,body:not(#_) select{background:rgba(4,12,27,.48)!important;border:1px solid rgba(230,245,255,.25)!important;box-shadow:inset 0 1px 3px rgba(0,0,0,.18)!important}
+body.glass button,body:not(#_) button,body:not(#_) .btn-secondary{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:linear-gradient(145deg,rgba(255,255,255,.26),rgba(255,255,255,.075))!important;border:1px solid rgba(240,249,255,.36)!important;box-shadow:inset 1px 1px 0 rgba(255,255,255,.45),0 5px 14px rgba(0,5,20,.18)!important;text-shadow:none!important}
+body.glass button:active,body:not(#_) button:active{transform:scale(.985)!important}
+body.glass .chat-area,body:not(#_) .chat-area{overscroll-behavior:contain;-webkit-overflow-scrolling:touch;scroll-behavior:auto;touch-action:pan-y}
+body.glass .message-bubble,body:not(#_) .message-bubble{contain:layout paint style}
+body.glass .typing-dots span,body:not(#_) .typing-dots span{animation:none!important;opacity:.8}
+.emoji-picker-container,.sticker-picker-container{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+@media(max-width:700px){body.glass .app-container,body:not(#_) .app-container{border-radius:0!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.32)!important}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}

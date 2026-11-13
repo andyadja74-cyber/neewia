@@ -253,6 +253,22 @@ body:not(#_) .cristal{background:radial-gradient(circle at 28% 22%,#fff 0,rgba(2
 body:not(#_) .tabbar{background:linear-gradient(145deg,rgba(255,255,255,.28),rgba(255,255,255,.07))!important;border:1px solid rgba(255,255,255,.55)!important;backdrop-filter:blur(22px) saturate(210%)!important;-webkit-backdrop-filter:blur(22px) saturate(210%)!important;box-shadow:inset 2px 2px 1px rgba(255,255,255,.85),inset -2px -2px 1px rgba(255,255,255,.3),0 16px 40px rgba(8,20,70,.45)!important}
 body:not(#_) .tabbar a{color:#e6f4ff}body:not(#_) .tabbar a.on{color:#fff;background:linear-gradient(160deg,rgba(255,255,255,.5),rgba(255,255,255,.12))}
 </style>
+
+<style id="leybotdy-crystal-performance">
+:root{--glass-level:58}
+.fond i,.fond i:nth-child(n){filter:none!important;animation:none!important;opacity:.25!important}
+.v,.verre,.tabbar,.banniere,.toast,.admin,.ligne,.t,.bub,.mg,.envoi-admin,.navflot,.ctc,.memo,.sess,.slot,.badge,.live,.pleine,.jauge{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+.v,.verre{background:linear-gradient(145deg,rgba(255,255,255,calc(.035 + var(--glass-level)*.0018)),rgba(255,255,255,.035) 48%,rgba(116,174,255,.075))!important;border:1px solid rgba(230,246,255,.38)!important;box-shadow:inset 1.5px 1.5px 0 rgba(255,255,255,.52),inset -1px -1px 0 rgba(135,205,255,.13),0 20px 46px rgba(0,8,25,.48)!important;animation:none!important;transform:none!important;transition:none!important}
+.v:before,.v:after,.verre:before,.verre:after,.halo{display:none!important;animation:none!important}
+.v>* ,.verre>*{animation:none!important}
+.tabbar,.banniere,.toast{background:linear-gradient(145deg,rgba(255,255,255,.22),rgba(255,255,255,.07))!important;border:1px solid rgba(240,249,255,.4)!important;box-shadow:inset 1px 1px 0 rgba(255,255,255,.48),0 10px 26px rgba(0,8,25,.35)!important}
+.ligne,.t,.bub,.mg,.envoi-admin,.sess,.slot{background:linear-gradient(145deg,rgba(255,255,255,.13),rgba(255,255,255,.045))!important;border:1px solid rgba(235,247,255,.25)!important;box-shadow:inset 1px 1px 0 rgba(255,255,255,.3),0 5px 14px rgba(0,5,20,.16)!important}
+button:before{display:none!important;animation:none!important}
+h1,.horreur,.slot.libre,.code .big,.fond i{animation:none!important}
+@media(max-width:700px){.v,.verre{box-shadow:inset 1px 1px 0 rgba(255,255,255,.4),0 10px 28px rgba(0,8,25,.35)!important}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+</style>
+<script>(function(){const K='leybotdy_glass_level';let n=58;try{n=Number(localStorage.getItem(K))||58}catch(e){}document.documentElement.style.setProperty('--glass-level',Math.max(15,Math.min(90,n)));window.addEventListener('storage',e=>{if(e.key===K)document.documentElement.style.setProperty('--glass-level',Math.max(15,Math.min(90,Number(e.newValue)||58)))})})();</script>
 </head><body><svg width="0" height="0" style="position:absolute" aria-hidden="true"><filter id="lg" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency=".012 .02" numOctaves="2" seed="4" result="n"/><feGaussianBlur in="n" stdDeviation="2" result="b"/><feDisplacementMap in="SourceGraphic" in2="b" scale="30" xChannelSelector="R" yChannelSelector="G"/></filter></svg>
 
 <div class="fond"><i></i><i></i></div><div class="motif"></div>

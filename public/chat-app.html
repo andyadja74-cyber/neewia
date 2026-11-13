@@ -86,7 +86,7 @@
   document.addEventListener('focusout', function () { setTimeout(function () { if (!/^(INPUT|TEXTAREA)$/.test((document.activeElement || {}).tagName || '')) clavier(false); }, 120); });
 })();
 </script>
-</head>
+<style id="glass-performance">:root{--glass-level:58}.glass-control{padding:14px;border-radius:20px;background:linear-gradient(145deg,rgba(255,255,255,.18),rgba(255,255,255,.045));border:1px solid rgba(255,255,255,.3);box-shadow:inset 1px 1px 0 rgba(255,255,255,.42)}.glass-control-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.glass-control-head h3{font-size:15px}#glassValue{font-size:13px;font-weight:800;color:#fff;background:rgba(255,255,255,.15);padding:4px 9px;border-radius:99px}#glassRange{width:100%;accent-color:#d8efff;margin:13px 0 4px;touch-action:pan-y}.glass-range-labels{display:flex;justify-content:space-between;color:var(--text-muted);font-size:11px}</style></head>
 <body class="glass" onload="verifierCookieID()">
 <div class="fond" aria-hidden="true"><i></i><i></i></div><div class="motif" aria-hidden="true"></div>
 
@@ -140,6 +140,7 @@
       <button onclick="changerTheme('--accent: #a855f7; --accent-hover: #c084fc; --bg-color: #171022; --card-bg: #231734; --header-bg: #35234c; --bubble-me: #581c87; --bubble-other: #35234c; --border: rgba(255, 255, 255, 0.08);')" style="background: #a855f7; width: 45px; height: 45px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2);"></button>
     </div>
     
+    <section class="glass-control" aria-label="Réglage du verre"><div class="glass-control-head"><h3>🫧 Intensité du verre</h3><output id="glassValue">58%</output></div><p class="subtitle" style="text-align:left">Transparent à gauche · plus teinté à droite. Sans flou animé.</p><input id="glassRange" type="range" min="15" max="90" step="1" value="58" aria-label="Transparence du verre"><div class="glass-range-labels"><span>Ultra transparent</span><span>Teinté</span></div></section>
     <h3 style="margin-top: 15px;">Effets Sonores (Web Audio API)</h3>
     <button onclick="basculerParametreSon()" id="soundToggleBtn" class="btn-secondary">🔊 Effets sonores : Activés</button>
 
@@ -1505,5 +1506,18 @@ For vue qu'elle ne le sache pas ohh 😬</span>
   }
 </script>
 
-</body>
+<script>(function(){
+  const KEY='leybotdy_glass_level';
+  function apply(v,save){
+    const n=Math.max(15,Math.min(90,Number(v)||58));
+    document.documentElement.style.setProperty('--glass-level',n);
+    const r=document.getElementById('glassRange'),o=document.getElementById('glassValue');
+    if(r&&r.value!==String(n))r.value=n;if(o)o.value=n+'%';
+    if(save!==false)try{localStorage.setItem(KEY,String(n))}catch(e){}
+  }
+  let initial=58;try{initial=Number(localStorage.getItem(KEY))||58}catch(e){}
+  apply(initial,false);
+  document.addEventListener('input',e=>{if(e.target&&e.target.id==='glassRange')apply(e.target.value,true)});
+  window.addEventListener('storage',e=>{if(e.key===KEY)apply(e.newValue,false)});
+})();</script></body>
 </html>
