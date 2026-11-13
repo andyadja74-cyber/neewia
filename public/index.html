@@ -220,7 +220,45 @@ h1{background-image:linear-gradient(100deg,#e6edff 0%,#fff 28%,#d9d2ff 50%,#fff 
 .etape img{border-color:#ffffff40}
 @media(max-width:700px){.verre,.v{background:linear-gradient(140deg,#ffffff30,#ffffff12 50%,#ffffff1c)!important;box-shadow:var(--verre-in),0 12px 34px #0008}
 .tabbar{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:linear-gradient(160deg,#ffffff30,#ffffff14)!important}}
-</style></head><body>
+</style><style id="liquid">
+/* 💧 Verre liquide */
+body:not(#_) .verre,body:not(#_) .v{border-radius:40px;background:linear-gradient(145deg,rgba(255,255,255,.24),rgba(255,255,255,.05) 42%,rgba(159,227,255,.13));backdrop-filter:blur(22px) saturate(200%) brightness(1.1);-webkit-backdrop-filter:blur(22px) saturate(200%) brightness(1.1);border:1px solid rgba(255,255,255,.34);box-shadow:inset 2px 2px 3px rgba(255,255,255,.65),inset -2px -3px 9px rgba(120,200,255,.28),inset 0 0 40px rgba(255,255,255,.05),0 30px 80px rgba(0,8,24,.6)}
+body:not(#_) .cristal{clip-path:none;border-radius:58% 42% 54% 46%/52% 60% 40% 48%;border:1px solid rgba(255,255,255,.45);background:radial-gradient(circle at 28% 24%,rgba(255,255,255,.85),rgba(255,255,255,0) 24%),radial-gradient(circle at 68% 80%,rgba(159,227,255,.4),transparent 58%),rgba(255,255,255,.06);box-shadow:inset 3px 3px 6px rgba(255,255,255,.5),inset -4px -6px 12px rgba(120,200,255,.35),0 14px 30px rgba(0,10,30,.35)}
+body:not(#_) input,body:not(#_) select,body:not(#_) textarea{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.3);border-radius:999px;box-shadow:inset 1.5px 2px 5px rgba(0,10,24,.4),inset 0 -1px 0 rgba(255,255,255,.25)}
+body:not(#_) textarea{border-radius:24px}
+body:not(#_) #go,body:not(#_) #tourBtn,body:not(#_) #banOk,body:not(#_) .go,body:not(#_) .chips button.on,body:not(#_) .seg button.on,body:not(#_) .copie{color:#fff;border:1px solid rgba(255,255,255,.5);border-radius:999px;background:radial-gradient(90% 120% at 30% 0,rgba(255,255,255,.6),rgba(255,255,255,.1) 60%),rgba(100,190,255,.2);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);text-shadow:0 1px 8px rgba(0,30,60,.55);box-shadow:inset 2px 2px 3px rgba(255,255,255,.7),inset -2px -3px 8px rgba(80,170,255,.35),0 10px 26px rgba(0,10,30,.4)}
+body:not(#_) .t,body:not(#_) .ligne,body:not(#_) .ctc,body:not(#_) .memo,body:not(#_) .envoi-admin,body:not(#_) .sess,body:not(#_) .slot,body:not(#_) .bub,body:not(#_) .mg,body:not(#_) .navflot,body:not(#_) .banniere,body:not(#_) .toast{border-radius:26px;background:radial-gradient(120% 90% at 15% 0,rgba(255,255,255,.26),rgba(255,255,255,.05) 55%),rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.26);backdrop-filter:blur(10px) saturate(170%);-webkit-backdrop-filter:blur(10px) saturate(170%);box-shadow:inset 1.5px 1.5px 2px rgba(255,255,255,.5),inset -1px -2px 6px rgba(120,200,255,.18),0 8px 22px rgba(0,8,24,.3)}
+body:not(#_) .tabbar{border-radius:36px!important;backdrop-filter:blur(20px) saturate(190%)!important}
+@media(prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+<style id="verre2">
+/* 🪟 VRAI VERRE : fond lumineux + panneaux transparents qui floutent / réfractent ce qu'il y a derrière */
+:root{--txt:#fff;--mut:#d3e8f6;--ice:#c9f1ff}
+body:not(#_) .fond{background:radial-gradient(90% 70% at 15% 10%,#2a7bff 0,transparent 60%),radial-gradient(80% 70% at 90% 20%,#19e3d2 0,transparent 58%),radial-gradient(90% 80% at 70% 100%,#b04dff 0,transparent 60%),radial-gradient(70% 60% at 10% 95%,#ff8a3d 0,transparent 55%),#0a1f4d}
+body:not(#_) .fond i{filter:blur(34px);opacity:.95;mix-blend-mode:screen}
+body:not(#_) .fond i:nth-child(1){background:#4d8dff}body:not(#_) .fond i:nth-child(2){background:#2ff2d8}body:not(#_) .fond i:nth-child(3){background:#c25bff}
+body:not(#_) .motif{opacity:.35}
+/* sphères et anneaux nets derrière le verre : on voit le verre les déformer et les flouter */
+/* panneau principal = vitre */
+body:not(#_) .verre,body:not(#_) .v{background:linear-gradient(140deg,rgba(255,255,255,.2),rgba(255,255,255,.04) 38%,rgba(255,255,255,.02) 62%,rgba(255,255,255,.12));backdrop-filter:blur(20px) saturate(190%) contrast(1.05);-webkit-backdrop-filter:blur(20px) saturate(190%) contrast(1.05);border:1px solid rgba(255,255,255,.38);border-radius:42px;box-shadow:inset 2px 2px 1px rgba(255,255,255,.8),inset -2px -2px 1px rgba(255,255,255,.3),inset 0 0 36px rgba(255,255,255,.1),0 24px 60px rgba(8,20,70,.45),0 2px 0 rgba(255,255,255,.25)}
+body:not(#_) .verre,body:not(#_) .v,body:not(#_) h1,body:not(#_) p,body:not(#_) label,body:not(#_) b{text-shadow:0 1px 10px rgba(10,30,90,.45)}
+/* tout le reste = petites vitres claires (plus de fonds sombres) */
+body:not(#_) .t,body:not(#_) .ligne,body:not(#_) .ctc,body:not(#_) .memo,body:not(#_) .envoi-admin,body:not(#_) .sess,body:not(#_) .slot,body:not(#_) .bub,body:not(#_) .mg,body:not(#_) .navflot,body:not(#_) .banniere,body:not(#_) .toast,body:not(#_) .badge,body:not(#_) .live,body:not(#_) .pleine,body:not(#_) .code .big,body:not(#_) .msg.err,body:not(#_) .jauge{background:linear-gradient(145deg,rgba(255,255,255,.22),rgba(255,255,255,.05) 55%,rgba(255,255,255,.1));border:1px solid rgba(255,255,255,.36);backdrop-filter:blur(14px) saturate(180%);-webkit-backdrop-filter:blur(14px) saturate(180%);box-shadow:inset 1.5px 1.5px 1px rgba(255,255,255,.75),inset -1.5px -1.5px 1px rgba(255,255,255,.25),inset 0 0 18px rgba(255,255,255,.08),0 10px 26px rgba(8,20,70,.3)}
+body:not(#_) .sess{background:linear-gradient(145deg,rgba(255,255,255,.12),rgba(255,255,255,.03))}
+body:not(#_) input,body:not(#_) select,body:not(#_) textarea{color:#fff;background:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,.16));border:1px solid rgba(255,255,255,.4);box-shadow:inset 0 3px 8px rgba(8,20,70,.28),inset 0 -1.5px 1px rgba(255,255,255,.5)}
+body:not(#_) input::placeholder,body:not(#_) textarea::placeholder{color:rgba(255,255,255,.6)}
+body:not(#_) input:focus,body:not(#_) select:focus,body:not(#_) textarea:focus{border-color:#fff;box-shadow:0 0 0 4px rgba(255,255,255,.25),inset 0 3px 8px rgba(8,20,70,.22)}
+/* boutons = pastilles de verre bombées */
+body:not(#_) button,body:not(#_) .go,body:not(#_) #go,body:not(#_) .copie,body:not(#_) .chips button,body:not(#_) .seg button{color:#fff;text-shadow:0 1px 8px rgba(10,30,90,.55);background:radial-gradient(120% 90% at 30% 0,rgba(255,255,255,.75),rgba(255,255,255,.14) 48%,rgba(255,255,255,.04) 70%),rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.55);border-radius:999px;backdrop-filter:blur(10px) saturate(190%);-webkit-backdrop-filter:blur(10px) saturate(190%);box-shadow:inset 2px 2px 2px rgba(255,255,255,.9),inset -2px -3px 5px rgba(255,255,255,.3),0 12px 26px rgba(8,20,70,.4)}
+body:not(#_) button:hover:not(:disabled){filter:brightness(1.12)}
+body:not(#_) #go,body:not(#_) .chips button.on,body:not(#_) .seg button.on{background:radial-gradient(120% 90% at 30% 0,rgba(255,255,255,.95),rgba(255,255,255,.3) 50%,rgba(140,210,255,.25) 75%),rgba(120,200,255,.2)}
+/* gouttes de verre : réfraction (Chrome/Android) avec repli flou ailleurs */
+body:not(#_) .cristal{background:radial-gradient(circle at 28% 22%,#fff 0,rgba(255,255,255,.35) 10%,rgba(255,255,255,0) 26%),linear-gradient(150deg,rgba(255,255,255,.28),rgba(255,255,255,.03) 60%,rgba(255,255,255,.18));backdrop-filter:blur(3px) saturate(200%);-webkit-backdrop-filter:blur(3px) saturate(200%);backdrop-filter:url(#lg) blur(2px) saturate(200%)}
+body:not(#_) .tabbar{background:linear-gradient(145deg,rgba(255,255,255,.28),rgba(255,255,255,.07))!important;border:1px solid rgba(255,255,255,.55)!important;backdrop-filter:blur(22px) saturate(210%)!important;-webkit-backdrop-filter:blur(22px) saturate(210%)!important;box-shadow:inset 2px 2px 1px rgba(255,255,255,.85),inset -2px -2px 1px rgba(255,255,255,.3),0 16px 40px rgba(8,20,70,.45)!important}
+body:not(#_) .tabbar a{color:#e6f4ff}body:not(#_) .tabbar a.on{color:#fff;background:linear-gradient(160deg,rgba(255,255,255,.5),rgba(255,255,255,.12))}
+</style>
+</head><body><svg width="0" height="0" style="position:absolute" aria-hidden="true"><filter id="lg" x="0" y="0" width="100%" height="100%"><feTurbulence type="fractalNoise" baseFrequency=".012 .02" numOctaves="2" seed="4" result="n"/><feGaussianBlur in="n" stdDeviation="2" result="b"/><feDisplacementMap in="SourceGraphic" in2="b" scale="30" xChannelSelector="R" yChannelSelector="G"/></filter></svg>
+
 <canvas id="neige"></canvas><div class="grain"></div><i class="etoile e1"></i><i class="etoile e2"></i><i class="etoile e3"></i><div class="fond"><i></i><i></i><i></i></div><div class="motif"></div>
 <div class="cristal c1"></div><div class="cristal c2"></div><div class="cristal c3"></div>
 <main class="verre" id="carte"><div class="halo"></div>
