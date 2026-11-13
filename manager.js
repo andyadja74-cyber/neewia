@@ -833,6 +833,25 @@ app.post('/api/admin/reprendre', admin, (req, res) => {
 });
 
 // Permutation : conserve les identifiants du compte actuel, met son worker hors ligne,
+// 🔄 Redémarre le bot d'UN compte précis. Sa session WhatsApp (sessions/<numero>) est conservée ;
+// seul le processus du bot est arrêté puis relancé (un compte en pause reste en pause).
+app.post('/api/admin/redemarrer', admin, (req, res) => {
+  const numero = String((req.body && req.body.numero) || '');
+  const s = sessions.get(numero);
+  if (!s) return res.status(404).json({ erreur: 'Session active introuvable.' });
+  if (s.statut === 'demarrage') return res.status(409).json({ erreur: 'Ce compte est en cours de jumelage : attends qu’il soit connecté.' });
+  if (s.redemarrageEnCours) return res.status(409).json({ erreur: 'Un redémarrage est déjà en cours pour ce compte.' });
+  s.redemarrageEnCours = true;
+  const ancien = s.proc;
+  s.proc = null;   // arrêt voulu : le gestionnaire ne le prend pas pour un plantage
+  if (ancien) { try { ancien.kill('SIGTERM'); } catch (e) {} }
+  s.essais = 0;
+  if (s.statut !== 'pause') s.statut = 'reconnexion';
+  setTimeout(() => { s.redemarrageEnCours = false; if (sessions.get(numero) === s && !s.proc) lancer(s); }, 2500);
+  console.log(`[ADMIN] 🔄 Redémarrage du bot …${numero.slice(-4)}`);
+  res.json({ ok: true });
+});
+
 // puis démarre la première personne de la file dans la place libérée.
 app.post('/api/admin/permuter', admin, (req, res) => {
   const numero = String((req.body && req.body.numero) || '');

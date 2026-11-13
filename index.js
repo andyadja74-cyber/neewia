@@ -2846,6 +2846,7 @@ async function startBot() {
       version,
       auth: state,
       getMessage: async (key) => messagesEnvoyes.get(key?.id)?.message || undefined,
+      msgRetryCounterCache: (globalThis.__retryCache ||= (() => { const m = new Map(); return { get: k => m.get(k), set: (k, v) => { m.set(k, v); if (m.size > 2000) m.delete(m.keys().next().value); }, del: k => m.delete(k), flushAll: () => m.clear() }; })()),
       logger: pino({ level: 'silent' }),
       printQRInTerminal: false,
       browser: Browsers.ubuntu('Chrome'),
