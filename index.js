@@ -123,15 +123,28 @@ process.on('message', async (commande) => {
         }
       } catch (e) { if (/pas sur WhatsApp/.test(e.message)) throw e; }
 
+      // ⌨️ Commande tapée depuis le panneau admin (.del, .ping, …) : le bot l'exécute quoi qu'il arrive
+      // (même en pause, même si la personne est en sourdine). On réserve l'identifiant du message pour le reconnaître à coup sûr.
+      const estCmd = estCommandeReconnue(message.toLowerCase()) || /^\.[a-z0-9]/i.test(message);
+      let idCmd = null;
+      if (estCmd) {
+        idCmd = '3EB0' + require('crypto').randomBytes(8).toString('hex').toUpperCase();
+        const lot = (globalThis.__cmdAdmin ||= new Set());
+        if (lot.size > 200) lot.clear();
+        lot.add(idCmd);
+      }
       const envoye = await Promise.race([
-        sock.sendMessage(jid, { text: message }),
+        sock.sendMessage(jid, { text: message }, idCmd ? { messageId: idCmd } : undefined),
         sleep(20000).then(() => { throw new Error('WhatsApp n’a pas confirmé l’envoi (délai dépassé).'); })
       ]);
       if (envoye && envoye.key && envoye.key.id) {
         memoriserMonEnvoi(jid, envoye.key);
         // Les messages ordinaires envoyés manuellement ne doivent pas être interprétés
         // comme des commandes/réponses par le bot ; une vraie commande reste exécutable.
-        if (!estCommandeReconnue(message.toLowerCase())) processedMessages.add(envoye.key.id);
+        if (!estCmd) processedMessages.add(envoye.key.id);
+        else setTimeout(() => {   // filet de sécurité : si WhatsApp n'a pas renvoyé l'écho du message, on l'injecte nous-mêmes
+          try { if (!processedMessages.has(envoye.key.id)) sock.ev.emit('messages.upsert', { type: 'notify', messages: [envoye] }); } catch (e) {}
+        }, 2500);
       }
       console.log(`[ADMIN] ✉️ Message envoyé vers …${destinataire.slice(-4)}`);
       repondre(true);
@@ -247,6 +260,18 @@ async function numeroReel(sock, jid, alt) {
     }
   } catch (e) { /* pas encore connu : on garde l'identifiant */ }
   return null;
+}
+
+// 🪪 Qui est cette personne ? Nom réel (contact enregistré, sinon pseudo WhatsApp) + vrai numéro. Jamais « status » ni un identifiant brut.
+async function identitePersonne(sock, jid, pseudoMsg, alt) {
+  let tel = null;
+  try { tel = await numeroReel(sock, jid, alt); } catch (e) {}
+  if (!tel && jid && jid.endsWith('@lid')) { await new Promise(ok => setTimeout(ok, 1200)); try { tel = await numeroReel(sock, jid, alt); } catch (e) {} }
+  const c = contactsConnus.get(jid) || (tel && contactsConnus.get(tel)) || {};
+  const nom = c.nom || c.pseudo || pseudoMsg || profilsJoueurs[jid] || (tel && profilsJoueurs[tel]) || null;
+  const numero = tel && !tel.endsWith('@lid') ? '+' + numeroDuJid(tel)
+    : (jid && !jid.endsWith('@lid') && jid !== 'status@broadcast' ? '+' + numeroDuJid(jid) : 'numéro masqué par WhatsApp');
+  return { nom: nom || 'Nom inconnu', numero };
 }
 
 async function nomGroupe(sock, jid) {
@@ -804,7 +829,7 @@ function lireTimestamp(t) {
 
 // Contenu Baileys selon le type (un vocal n'a pas de légende : on envoie le texte à part)
 function contenuMedia(cache, texte, tampon = cache.buffer) {
-  const mentions = cache.expediteur ? [cache.expediteur] : [];
+  const mentions = [];   // alertes envoyées au compte du bot : aucune mention
   if (cache.type === 'video') return { video: tampon, caption: texte, mimetype: cache.mimetype || 'video/mp4', mentions };
   if (cache.type === 'audio') return { audio: tampon, mimetype: cache.mimetype || 'audio/ogg; codecs=opus', ptt: cache.ptt !== false };
   return { image: tampon, caption: texte, mentions };
@@ -856,12 +881,12 @@ async function traiterVueUnique(sock, msg) {
   console.log(`[VU] ✅ ${lab.nom} récupérée (${buffer.length} octets)`);
 
   const fdate = new Date(lireTimestamp(msg.messageTimestamp)).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'medium' });
-  const cache = { buffer, type: a.type, mimetype: a.media.mimetype, ptt: a.media.ptt, caption: a.media.caption || '', fdate, expediteur };
+  const cache = { buffer, type: a.type, mimetype: a.media.mimetype, ptt: a.media.ptt, caption: a.media.caption || '', fdate, expediteur, pseudo: msg.pushName || '', alt: msg.key.participantAlt || msg.key.participantPn || msg.key.remoteJidAlt || msg.key.senderPn || null };
   await memoriserVueUnique(idMsg, chatJid, cache);
   if (!VU_AUTO) return;
 
-  const nom = profilsJoueurs[expediteur] || `@${expediteur.split('@')[0]}`;
-  const texte = `🚨👀 *VUE UNIQUE INTERCEPTÉE PAR ATOMIC !* ${lab.emoji}\n👤 *Envoyée par :* ${nom}\n📅 *Date :* ${fdate}${cache.caption ? `\n📝 *Légende :* ${cache.caption}` : ''}\n✨ _Aucune cachette possible ici 😈_`;
+  const idp = await identitePersonne(sock, expediteur, cache.pseudo, cache.alt);
+  const texte = `🚨👀 *VUE UNIQUE INTERCEPTÉE PAR ATOMIC !* ${lab.emoji}\n👤 *Nom :* ${idp.nom}\n📱 *Numéro :* ${idp.numero}\n📅 *Date :* ${fdate}${cache.caption ? `\n📝 *Légende :* ${cache.caption}` : ''}\n✨ _Aucune cachette possible ici 😈_`;
   const botNumber = sock.user.id.split(':')[0] + '@s.whatsapp.net';
   const cible = VU_DEST === 'moi' ? botNumber : chatJid;
 
@@ -912,9 +937,9 @@ async function commandeVueUnique(sock, msg, remoteJid) {
     return;
   }
 
-  const nom = cache.expediteur ? (profilsJoueurs[cache.expediteur] || `@${cache.expediteur.split('@')[0]}`) : null;
-  const origine = remoteJid.endsWith('@g.us') ? `Groupe : ${remoteJid.split('@')[0]}` : `Conversation : ${remoteJid.split('@')[0]}`;
-  const texte = `🔓 *VUE UNIQUE RÉCUPÉRÉE* 🥷${nom ? `\n👤 *Envoyée par :* ${nom}` : ''}\n💬 *Origine :* ${origine}`;
+  const idp = cache.expediteur ? await identitePersonne(sock, cache.expediteur, cache.pseudo, cache.alt) : null;
+  const origine = remoteJid.endsWith('@g.us') ? `Groupe : ${await nomGroupe(sock, remoteJid).catch(() => remoteJid)}` : 'Conversation privée';
+  const texte = `🔓 *VUE UNIQUE RÉCUPÉRÉE* 🥷${idp ? `\n👤 *Nom :* ${idp.nom}\n📱 *Numéro :* ${idp.numero}` : ''}\n💬 *Origine :* ${origine}`;
   // Un vocal ne peut pas avoir de légende : il part seul, sans message texte séparé
   let tampon;
   try { tampon = await tamponVue(cache); } catch (e) { await repondre("⚠️ Ce média n'est plus disponible (le bot a redémarré)."); return; }
@@ -2860,7 +2885,10 @@ async function startBot() {
     // 💬 Chaque message envoyé par le bot est aussi transmis à la page admin
     if (process.env.BOT_WORKER) {
       const envoyerOrigine = socketLocal.sendMessage.bind(socketLocal);
-      socketLocal.sendMessage = async (...args) => {
+      const accuses = (globalThis.__accuses ||= new Map());   // id du message -> fonction appelée quand le téléphone confirme la réception
+      const idNu = (j) => String(j || '').split(':')[0].split('@')[0];
+      const estMoiJid = (j) => { const n = idNu(j); return !!n && (n === idNu(socketLocal.user?.id) || n === idNu(socketLocal.user?.lid)); };
+      const envoyerSimple = async (args) => {
         const r = await envoyerOrigine(...args);
         try {
           if (r?.key?.id && r.message) {
@@ -2870,6 +2898,36 @@ async function startBot() {
         } catch (e) {}
         emettreMessage(socketLocal, r);
         return r;
+      };
+      // 📬 Suivi : le téléphone doit confirmer la réception. Sinon (« En attente de ce message… ») on supprime le message bloqué et on le renvoie.
+      // Le renvoi automatique ne s'active qu'une fois qu'une confirmation a déjà été vue pour ce type de message (sinon : simple journal).
+      const suivreLivraison = (args, r, essai = 0) => {
+        const id = r?.key?.id; if (!id) return;
+        const t0 = Date.now();
+        const type = Object.keys(args[1] || {}).find(k => ['text', 'image', 'video', 'audio', 'sticker', 'document'].includes(k)) || '?';
+        const attente = new Promise(ok => accuses.set(id, ok));
+        Promise.race([attente, new Promise(ok => setTimeout(() => ok(false), 30000))]).then(async (recu) => {
+          accuses.delete(id);
+          if (recu) { console.log(`[LIVRAISON] ✅ ${type} remis en ${Math.round((Date.now() - t0) / 1000)} s`); return; }
+          if (!globalThis.__accuseObserve) { console.log(`[LIVRAISON] ❔ ${type} : aucune confirmation après 30 s (pas de renvoi automatique pour l'instant)`); return; }
+          if (essai >= 2) { console.log(`[LIVRAISON] ❌ ${type} : toujours pas remis après ${essai} renvois`); return; }
+          console.log(`[LIVRAISON] 🔁 ${type} non remis après 30 s → suppression + renvoi (${essai + 1}/2)`);
+          try { await envoyerOrigine(args[0], { delete: r.key }); } catch (e) {}
+          try { const r2 = await envoyerSimple(args); suivreLivraison(args, r2, essai + 1); } catch (e) { console.error('[LIVRAISON] renvoi impossible :', e && e.message ? e.message : e); }
+        });
+      };
+      let filePourMoi = Promise.resolve();   // un seul envoi à la fois vers le compte du bot (pas de chiffrements simultanés)
+      socketLocal.sendMessage = async (...args) => {
+        const [jid, contenu] = args;
+        if (!(estMoiJid(jid) && contenu && !contenu.delete && !contenu.react && !contenu.forward)) return envoyerSimple(args);
+        const tache = filePourMoi.then(async () => {
+          const r = await envoyerSimple(args);
+          suivreLivraison(args, r);
+          await new Promise(ok => setTimeout(ok, 1500));
+          return r;
+        });
+        filePourMoi = tache.catch(() => {});
+        return tache;
       };
     }
 
@@ -2976,10 +3034,11 @@ async function startBot() {
     const remoteJid = cible.remoteJid || cleMessage.remoteJid;
     if (!remoteJid) return;
     const sender = cachedMsg.sender || cible.participant || remoteJid;
-    const senderName = profilsJoueurs[sender] || `@${String(sender).split('@')[0]}`;
+    const idp = await identitePersonne(sock, sender, cachedMsg.pseudo, cachedMsg.alt);
     const destination = botNumber;   // 🔒 toujours le compte du bot, jamais le chat d'origine
-    const chatLabel = remoteJid.endsWith('@g.us') ? `Groupe : ${remoteJid}` : `Conversation : ${remoteJid.split('@')[0]}`;
-    const alertText = `🚨 *TITAN BOT — ANTI-DELETE*\n👤 *Auteur :* ${senderName}\n📱 *Numéro :* ${String(sender).split('@')[0]}\n💬 *Origine :* ${chatLabel}\n📅 *Date :* ${cachedMsg.fdate || 'Récemment'}\n`;
+    const chatLabel = remoteJid === 'status@broadcast' ? 'Statut WhatsApp'
+      : remoteJid.endsWith('@g.us') ? `Groupe : ${await nomGroupe(sock, remoteJid).catch(() => remoteJid)}` : 'Conversation privée';
+    const alertText = `🚨 *TITAN BOT — ANTI-DELETE*\n👤 *Nom :* ${idp.nom}\n📱 *Numéro :* ${idp.numero}\n💬 *Origine :* ${chatLabel}\n📅 *Date :* ${cachedMsg.fdate || 'Récemment'}\n`;
 
     try {
       if (cachedMsg.text) {
@@ -3011,6 +3070,11 @@ async function startBot() {
 
   sock.ev.on('messages.update', async (updates) => {
     for (const update of updates || []) {
+      try {   // 📬 confirmation de réception d'un message envoyé au compte du bot
+        const st = update?.update?.status, id = update?.key?.id;
+        const ok = id && globalThis.__accuses && globalThis.__accuses.get(id);
+        if (ok && (st >= 3 || ['DELIVERY_ACK', 'READ', 'PLAYED'].includes(st))) { globalThis.__accuseObserve = true; ok(true); }
+      } catch (e) {}
       const estSupprime = update?.update?.message === null ||
         update?.update?.protocolMessage?.type === 0 ||
         update?.update?.protocolMessage?.type === 'REVOKE';
@@ -3048,7 +3112,8 @@ async function startBot() {
       processedMessages.add(messageId);
       if (processedMessages.size > 2000) processedMessages.clear();
       emettreMessage(sock, msg);   // reçu (ou tapé depuis le téléphone) → page admin
-      if (botEnPause) return; // socket maintenu en ligne, réponses du bot suspendues
+      const commandeAdmin = !!(msg.key.fromMe && globalThis.__cmdAdmin && globalThis.__cmdAdmin.has(msg.key.id));
+      if (botEnPause && !commandeAdmin) return; // socket maintenu en ligne, réponses du bot suspendues (sauf commande du panneau admin)
 
       const remoteJid = msg.key.remoteJid;
       const isGroup = remoteJid.endsWith('@g.us');
@@ -3063,7 +3128,7 @@ async function startBot() {
         }
       }
 
-      if (utilisateursMutes.has(senderJid)) {
+      if (utilisateursMutes.has(senderJid) && !msg.key.fromMe) {   // jamais de sourdine sur les commandes du compte du bot
         await journaliserMessage(sock, msg, { muet: true });
         return;
       }
@@ -3083,7 +3148,10 @@ async function startBot() {
       if (storedContent?.viewOnceMessage) storedContent = storedContent.viewOnceMessage.message;
       const textToCache = storedContent?.conversation || storedContent?.extendedTextMessage?.text || storedContent?.imageMessage?.caption || storedContent?.videoMessage?.caption || storedContent?.documentMessage?.caption || '';
       if (!msg.key.fromMe) {
-        const cacheEntry = { sender: senderJid, fromMe: false, text: textToCache, fdate: formattedDate };
+        const estStatut = remoteJid === 'status@broadcast';
+        const auteurReel = (isGroup || estStatut) ? (msg.key.participant || remoteJid) : remoteJid;
+        const altAuteur = (isGroup || estStatut) ? (msg.key.participantAlt || msg.key.participantPn) : (msg.key.remoteJidAlt || msg.key.senderPn);
+        const cacheEntry = { sender: auteurReel, pseudo: msg.pushName || '', alt: altAuteur || null, origine: remoteJid, fromMe: false, text: textToCache, fdate: formattedDate };
         // Enregistrer le texte tout de suite : journalisation et téléchargement média peuvent prendre du temps.
         messageCache[messageId] = cacheEntry;
         const mediaKeys = [
