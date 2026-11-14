@@ -381,7 +381,7 @@ body.glass .msg-action-btn { background: none; box-shadow: none; text-shadow: no
 
 
 /* ══════ 🫧 LIQUID GLASS SOMBRE (curseur 💧) — même fond que l'accueil et l'admin ══════ */
-:root{--vg:.35;--fa:calc(.03 + var(--vg)*.18);--ta:calc(var(--vg)*.14);--bl:calc(16px + var(--vg)*16px);--rim:rgba(255,255,255,.3);--ice:#f2f5fa;--txt:#f2f5fa;--mut:#b4bfce;
+:root{--vg:0;--fa:calc(.03 + var(--vg)*.18);--ta:calc(var(--vg)*.14);--bl:calc(16px + var(--vg)*16px);--rim:rgba(255,255,255,.3);--ice:#f2f5fa;--txt:#f2f5fa;--mut:#b4bfce;
 --glass:linear-gradient(150deg,rgba(255,255,255,calc(var(--fa) + .06)),rgba(255,255,255,var(--fa)) 42%,rgba(255,255,255,calc(var(--fa) + .03))),rgba(150,165,190,var(--ta));
 --glass-s:linear-gradient(150deg,rgba(255,255,255,calc(var(--fa)*.7 + .04)),rgba(255,255,255,calc(var(--fa)*.35 + .012)));
 --edge:inset 0 1px 0 rgba(255,255,255,.6),inset 0 -1px 0 rgba(255,255,255,.12),inset 1px 0 0 rgba(255,255,255,.18),inset -1px 0 0 rgba(255,255,255,.18),inset 0 0 22px rgba(255,255,255,.06)}

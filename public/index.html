@@ -239,7 +239,7 @@ button:before{display:none!important;animation:none!important}
 <script>(function(){const K='leybotdy_glass_level';let n=58;try{n=Number(localStorage.getItem(K))||58}catch(e){}document.documentElement.style.setProperty('--glass-level',Math.max(15,Math.min(90,n)));window.addEventListener('storage',e=>{if(e.key===K)document.documentElement.style.setProperty('--glass-level',Math.max(15,Math.min(90,Number(e.newValue)||58)))})})();</script>
 <style id="lg2">
 /* 🫧 LIQUID GLASS sombre · curseur transparent ↔ teinté (💧 dans la barre du bas). Dernier bloc : bat les anciens styles et le « mode léger » mobile. */
-:root{--vg:.35;--fa:calc(.03 + var(--vg)*.18);--ta:calc(var(--vg)*.14);--bl:calc(16px + var(--vg)*16px);--rim:rgba(255,255,255,.3);--ice:#f2f5fa;--txt:#f2f5fa;--mut:#b4bfce;
+:root{--vg:0;--fa:calc(.03 + var(--vg)*.18);--ta:calc(var(--vg)*.14);--bl:calc(16px + var(--vg)*16px);--rim:rgba(255,255,255,.3);--ice:#f2f5fa;--txt:#f2f5fa;--mut:#b4bfce;
 --glass:linear-gradient(150deg,rgba(255,255,255,calc(var(--fa) + .06)),rgba(255,255,255,var(--fa)) 42%,rgba(255,255,255,calc(var(--fa) + .03))),rgba(150,165,190,var(--ta));
 --glass-s:linear-gradient(150deg,rgba(255,255,255,calc(var(--fa)*.7 + .04)),rgba(255,255,255,calc(var(--fa)*.35 + .012)));
 --edge:inset 0 1px 0 rgba(255,255,255,.6),inset 0 -1px 0 rgba(255,255,255,.12),inset 1px 0 0 rgba(255,255,255,.18),inset -1px 0 0 rgba(255,255,255,.18),inset 0 0 22px rgba(255,255,255,.06)}
@@ -260,14 +260,6 @@ input:focus,select:focus,textarea:focus{border-color:rgba(255,255,255,.8)!import
 .tabbar,.banniere,.navflot{background:var(--glass)!important;border:1px solid var(--rim)!important;backdrop-filter:blur(var(--bl)) saturate(150%) brightness(.88)!important;-webkit-backdrop-filter:blur(var(--bl)) saturate(150%) brightness(.88)!important;box-shadow:var(--edge),0 18px 44px rgba(0,0,0,.55)!important}
 .tabbar{border-radius:34px!important}.tabbar a{color:#d3dbe8}.tabbar a.on{color:#fff;background:linear-gradient(160deg,rgba(255,255,255,.3),rgba(255,255,255,.07))!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.7)!important}
 h1{filter:drop-shadow(0 2px 4px rgba(0,0,0,.45))}
-#vgPan{position:fixed;left:50%;bottom:calc(92px + env(safe-area-inset-bottom));transform:translate(-50%,14px) scale(.96);opacity:0;pointer-events:none;transition:opacity .25s,transform .25s;z-index:80;width:min(90vw,360px);padding:16px 18px 14px;border-radius:30px;background:var(--glass)!important;border:1px solid var(--rim);backdrop-filter:blur(26px) saturate(150%) brightness(.85);-webkit-backdrop-filter:blur(26px) saturate(150%) brightness(.85);box-shadow:var(--edge),0 24px 60px rgba(0,0,0,.6);color:#fff;font:600 13px/1.3 -apple-system,system-ui,sans-serif;text-shadow:0 1px 3px rgba(0,0,0,.45)}
-#vgPan.on{opacity:1;transform:translate(-50%,0) scale(1);pointer-events:auto}
-#vgPan .vgh{display:flex;justify-content:space-between;margin-bottom:8px}#vgPan .vgl{display:flex;justify-content:space-between;margin-top:2px;font-weight:500;color:#cdd6e3;font-size:12px}
-#vgPan input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:32px;margin:0;padding:0;border:0!important;background:transparent!important;box-shadow:none!important;border-radius:0}
-#vgPan input[type=range]::-webkit-slider-runnable-track{height:10px;border-radius:99px;background:linear-gradient(90deg,rgba(255,255,255,.06),rgba(170,185,210,.5));border:1px solid rgba(255,255,255,.28);box-shadow:inset 0 2px 4px rgba(0,0,0,.45)}
-#vgPan input[type=range]::-moz-range-track{height:10px;border-radius:99px;background:linear-gradient(90deg,rgba(255,255,255,.06),rgba(170,185,210,.5));border:1px solid rgba(255,255,255,.28)}
-#vgPan input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:30px;height:30px;margin-top:-11px;border-radius:50%;background:radial-gradient(circle at 35% 25%,#fff,rgba(255,255,255,.75) 45%,rgba(200,210,225,.65));border:1px solid rgba(255,255,255,.9);box-shadow:inset 0 -3px 6px rgba(120,135,160,.4),0 4px 12px rgba(0,0,0,.55)}
-#vgPan input[type=range]::-moz-range-thumb{width:28px;height:28px;border-radius:50%;background:radial-gradient(circle at 35% 25%,#fff,rgba(200,210,225,.75));border:1px solid #fff;box-shadow:0 4px 12px rgba(0,0,0,.55)}
 .tabbar{width:min(96vw,460px);justify-content:space-between}.tabbar a{min-width:0!important;flex:1;padding:8px 4px!important}
 .tabbar a em{filter:drop-shadow(0 1px 0 rgba(255,255,255,.55)) drop-shadow(0 4px 5px rgba(0,0,0,.55)) saturate(.9) contrast(1.08)}
 @media(prefers-reduced-motion:reduce){.fond i{animation:none!important}}
@@ -335,7 +327,7 @@ h1{filter:drop-shadow(0 2px 4px rgba(0,0,0,.45))}
 </main>
 <div id="zoom"><img alt=""></div>
 <div class="banniere" id="ban"><span id="banTxt">📲 Installe LEYBOTDY comme une vraie appli</span><button id="banOk" type="button">Installer</button><b id="banX">✕</b></div>
-<nav class="tabbar"><a href="/" class="on"><em>🏠</em>Accueil</a><a href="#aide" id="tabAide"><em>❓</em>Aide</a><a href="/chat"><em>💬</em>Chat</a><a href="/admin"><em>🔐</em>Admin</a></nav>
+<nav class="tabbar"><a href="/" class="on"><em>🏠</em>Accueil</a><a href="#aide" id="tabAide"><em>❓</em>Aide</a><a href="/chat"><em>💬</em>Chat</a></nav>
 <script>
 const $=id=>document.getElementById(id);let jeton=null,suivi=null,mode='direct',jetonFile=null,suiviFile=null,saisie={};const libelle=()=>mode==='file'?'🔔 Rejoindre la file d’attente':'Connecter mon bot';
 async function etat(){
@@ -444,17 +436,8 @@ document.addEventListener('click',e=>{if(e.target.closest('button,a,.slot')&&nav
 (()=>{const d=$('aide'),o=()=>{d.open=true;d.scrollIntoView({behavior:'smooth',block:'start'})};
   $('tabAide').onclick=e=>{e.preventDefault();o();history.replaceState(null,'','#aide')};
   if(location.hash==='#aide')setTimeout(o,400)})();
-</script><script src="/musique.js" defer></script><script id="vgjs">(function(){var K='verreVG',R=document.documentElement;
-function lire(){try{var v=parseFloat(localStorage.getItem(K));return isNaN(v)?.35:Math.min(1,Math.max(0,v))}catch(e){return .35}}
-function poser(v){R.style.setProperty('--vg',v);}
-poser(lire());
-function monter(){var nav=document.querySelector('.tabbar');if(!nav||document.getElementById('vgTab'))return;
-var a=document.createElement('a');a.href='#';a.id='vgTab';a.innerHTML='<em>💧</em>Verre';nav.appendChild(a);
-var p=document.createElement('div');p.id='vgPan';p.innerHTML='<div class="vgh"><b>Verre liquide</b><span id="vgVal"></span></div><input id="vgRng" type="range" min="0" max="100" step="1" aria-label="Transparence du verre"><div class="vgl"><span>Transparent</span><span>Teinté</span></div>';
-document.body.appendChild(p);var r=p.querySelector('#vgRng'),o=p.querySelector('#vgVal');
-function maj(v){r.value=Math.round(v*100);o.textContent=Math.round(v*100)+' %'}maj(lire());
-r.addEventListener('input',function(){var v=r.value/100;poser(v);try{localStorage.setItem(K,v)}catch(e){}maj(v)});
-a.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();p.classList.toggle('on')});
-document.addEventListener('click',function(e){if(!p.contains(e.target))p.classList.remove('on')});}
-addEventListener('storage',function(e){if(e.key===K)poser(lire())});
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',monter);else monter();})();</script></body></html>
+</script><script src="/musique.js" defer></script><script id="secretAdmin">(function(){var ul=document.querySelector('.garanties');if(!ul||ul.children.length<3)return;
+var G=ul.children[0],D=ul.children[2],last=null,n=0,t=0;
+function tap(c){var now=Date.now();if(c===last||now-t>3000)n=0;n++;last=c;t=now;if(n>=4){n=0;last=null;location.href='/admin'}}
+G.addEventListener('click',function(){tap('g')});D.addEventListener('click',function(){tap('d')});
+[G,D].forEach(function(e){e.style.webkitTapHighlightColor='transparent';e.style.userSelect='none';e.style.webkitUserSelect='none'});})();</script></body></html>
