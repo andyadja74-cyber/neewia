@@ -440,4 +440,57 @@ document.addEventListener('click',e=>{if(e.target.closest('button,a,.slot')&&nav
 var G=ul.children[0],D=ul.children[2],last=null,n=0,t=0;
 function tap(c){var now=Date.now();if(c===last||now-t>3000)n=0;n++;last=c;t=now;if(n>=4){n=0;last=null;location.href='/admin'}}
 G.addEventListener('click',function(){tap('g')});D.addEventListener('click',function(){tap('d')});
-[G,D].forEach(function(e){e.style.webkitTapHighlightColor='transparent';e.style.userSelect='none';e.style.webkitUserSelect='none'});})();</script></body></html>
+[G,D].forEach(function(e){e.style.webkitTapHighlightColor='transparent';e.style.userSelect='none';e.style.webkitUserSelect='none'});})();</script>
+<style id="leybotdy-glass-transparent-default">
+  :root {
+    --vg: 0 !important;
+    --fa: 0 !important;
+    --ta: 0 !important;
+    --bl: 0px !important;
+    --rim: rgba(255,255,255,.12) !important;
+    --glass: transparent !important;
+    --glass-s: transparent !important;
+  }
+  .verre, .v, .tabbar, .banniere, .navflot,
+  .sess, .slot, .garanties li, .etape, .aide, .conseils,
+  .t, .ligne, .envoi-admin, .seg, .mg, .vide, .pleine,
+  .msg.err, .memo, .ctc, .appz, .codeBox, .toast, .bub,
+  .code .big {
+    background: transparent !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+    box-shadow: none !important;
+  }
+  .verre, .v, .tabbar, .banniere, .navflot {
+    border-color: rgba(255,255,255,.12) !important;
+  }
+  /* Le réglage de transparence n'est plus affiché. */
+  [data-glass-toggle], #glassToggle, #glass-toggle,
+  .glass-toggle, .glass-control, .glass-switch {
+    display: none !important;
+  }
+</style>
+<script id="leybotdy-remove-glass-toggle">
+(() => {
+  const removeGlassToggle = () => {
+    document.querySelectorAll(
+      '[data-glass-toggle], #glassToggle, #glass-toggle, .glass-toggle, .glass-control, .glass-switch'
+    ).forEach(el => el.remove());
+
+    // Retire aussi un éventuel bouton dédié identifié par son libellé/icône.
+    document.querySelectorAll('button, a, [role="button"]').forEach(el => {
+      const label = (el.getAttribute('aria-label') || el.title || el.textContent || '').trim();
+      if (/💧|transparence du verre|verre transparent|verre teinté|glass opacity/i.test(label)) {
+        el.remove();
+      }
+    });
+  };
+  removeGlassToggle();
+  new MutationObserver(removeGlassToggle).observe(document.documentElement, {
+    childList: true,
+    subtree: true
+  });
+})();
+</script>
+
+</body></html>
