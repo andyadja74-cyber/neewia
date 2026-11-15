@@ -2539,7 +2539,14 @@ async function commandeIA(sock, msg, remoteJid, cleanText, senderJid, isGroup) {
       }
     }
     const contents = [...conv.messages.map(m => ({ role: m.role, parts: [{ text: m.texte }] })), { role: 'user', parts }];
-    const res = await appelerGemini(contents, { modeleForce: modeleDemande });
+    let res = await appelerGemini(contents, { modeleForce: modeleDemande });
+    // Gemini surchargé (503), limite atteinte ou réponse vide : secours automatique sur Gemma (texte seulement, sans recherche Google)
+    const avecImage = contents.some(c => (c.parts || []).some(p => p.inline_data || p.inlineData));
+    if (!res.texte && !res.bloque && !res.erreurCle && !avecImage && GEMMA_MODELE !== modeleDemande) {
+      console.log(`[IA] ⚠️ ${modeleDemande} indisponible (${res.detail || res.erreur}) → secours sur ${GEMMA_MODELE}`);
+      const secours = await appelerGemini(contents, { modeleForce: GEMMA_MODELE, sansRecherche: true });
+      if (secours.texte) res = secours;
+    }
 
     if (res.erreurCle) return rep("⚠️ La clé Gemini est refusée. Vérifie *GEMINI_API_KEY* sur Render (clé copiée en entier, sans espace).");
     if (res.bloque) return rep("🚫 Je ne peux pas répondre à ça. Reformule ta demande autrement.");
@@ -2735,7 +2742,8 @@ async function activerModeAuto(sock, jid, alt) {
 async function verifierCodeAuto(sock, cible, saisie, alt) {
   const t = Date.now();
   if (essaisCodeAuto.bloque > t) return true;                         // trop d'essais : silence total
-  if (codeAutoValide(saisie)) { essaisCodeAuto.n = 0; await activerModeAuto(sock, cible, alt); return true; }
+  if (codeAutoValide(saisie)) { essaisCodeAuto.n = 0; console.log('[IA-AUTO] 🔓 Code accepté.'); await activerModeAuto(sock, cible, alt); return true; }
+  console.log('[IA-AUTO] ❌ Code refusé.');
   essaisCodeAuto.n++;
   if (essaisCodeAuto.n >= 5) { essaisCodeAuto.bloque = t + 15 * 60000; essaisCodeAuto.n = 0; console.log('[IA-AUTO] 🔒 5 mauvais codes : demandes ignorées 15 minutes.'); }
   await direAMoi(sock, '❌ Code incorrect. Demande refusée.');
@@ -2752,7 +2760,7 @@ async function gererCommandeAuto(sock, msg, jid) {
   const alt = msg.key.remoteJidAlt || msg.key.senderPn;
   if (CODE_AUTO && attend && jid === attend.chatCode && !mCmd) {      // le message suivant, dans ta discussion avec toi = le code
     attenteCodeAuto = null;
-    effacerMessage(sock, jid, msg.key);
+    // Le code est tapé dans ta discussion avec toi-même (privée) : on ne le supprime pas, ça évite des échanges inutiles avec WhatsApp.
     return verifierCodeAuto(sock, attend.cible, t, attend.alt);
   }
   if (!mCmd) return false;
