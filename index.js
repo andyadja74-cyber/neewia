@@ -269,8 +269,9 @@ async function identitePersonne(sock, jid, pseudoMsg, alt) {
   if (!tel && jid && jid.endsWith('@lid')) { await new Promise(ok => setTimeout(ok, 1200)); try { tel = await numeroReel(sock, jid, alt); } catch (e) {} }
   const c = contactsConnus.get(jid) || (tel && contactsConnus.get(tel)) || {};
   const nom = c.nom || c.pseudo || pseudoMsg || profilsJoueurs[jid] || (tel && profilsJoueurs[tel]) || null;
-  const numero = tel && !tel.endsWith('@lid') ? '+' + numeroDuJid(tel)
-    : (jid && !jid.endsWith('@lid') && jid !== 'status@broadcast' ? '+' + numeroDuJid(jid) : 'numéro masqué par WhatsApp');
+  const avecPlus = (j) => '+' + String(numeroDuJid(j)).replace(/^\++/, '');   // jamais deux « + » de suite
+  const numero = tel && !tel.endsWith('@lid') ? avecPlus(tel)
+    : (jid && !jid.endsWith('@lid') && jid !== 'status@broadcast' ? avecPlus(jid) : 'numéro masqué par WhatsApp');
   return { nom: nom || 'Nom inconnu', numero };
 }
 
@@ -2430,10 +2431,10 @@ async function appelerGemini(contents, opts = {}) {
   let erreur = 'inconnue';
   let detail = '';
   for (const { modele, recherche } of essais.slice(0, 3)) {
+    const estGemma = /^gemma/i.test(modele);   // (doit être déclaré AVANT d'être utilisé : c'était la cause du silence total de l'IA)
     (estGemma ? iaAppels.gemma : iaAppels.gemini).push(Date.now());
     if (opts.compterQuotaJour) compterAppelJour();
     const consignes = opts.consignes || consignesIA();
-    const estGemma = /^gemma/i.test(modele);
     const temperature = opts.temperature !== undefined ? opts.temperature : 0.7;
     let corps;
     if (estGemma) {
