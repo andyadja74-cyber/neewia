@@ -2342,18 +2342,23 @@ async function commandeTraduire(sock, msg, remoteJid, cleanText) {
 }
 
 // 🧠 ═══════════════════════════════════════════════════════════
-// IA GEMINI : .ia [question]  (alias .gemini)
+// MODE AUTO : Gemma ; COMMANDE .ia : Gemini 2.5 Flash Lite
 // Variables Render : GEMINI_API_KEY (obligatoire)
-// Facultatives : GEMINI_MODEL (défaut gemini-2.5-flash), GEMINI_MODEL_SECOURS (défaut gemini-2.5-flash-lite),
+// Facultatives : GEMMA_MODEL (défaut gemma-4-26b-a4b-it), IA_GEMINI_MODEL (défaut gemini-2.5-flash-lite),
 //   GEMINI_REFLEXION (budget de réflexion, défaut 1024, 0 = désactivé), GEMINI_RECHERCHE=off (désactive la recherche Google),
 //   GEMINI_RPM (requêtes/min par session du bot, défaut 4)
 // ═══════════════════════════════════════════════════════════
 const GEMINI_CLE = (process.env.GEMINI_API_KEY || '').trim();
-const GEMINI_MODELES = [(process.env.GEMINI_MODEL || 'gemini-2.5-flash').trim(), (process.env.GEMINI_MODEL_SECOURS || 'gemini-2.5-flash-lite').trim()]
-  .filter((m, i, a) => m && a.indexOf(m) === i);
+// Les noms de modèles sont nettoyés : « Gemini 2.5 Flash Lite » ou « gemini-2.5-flash lite » deviennent « gemini-2.5-flash-lite ».
+const nomModele = (m) => String(m || '').trim().toLowerCase().replace(/[\s_]+/g, '-');
+const GEMMA_MODELE = nomModele(process.env.GEMMA_MODEL) || (nomModele(process.env.GEMINI_MODEL).startsWith('gemma') ? nomModele(process.env.GEMINI_MODEL) : 'gemma-4-26b-a4b-it');
+const IA_GEMINI_MODELE = nomModele(process.env.IA_GEMINI_MODEL) || nomModele(process.env.GEMINI_MODEL_SECOURS) || (nomModele(process.env.GEMINI_MODEL).startsWith('gemini') ? nomModele(process.env.GEMINI_MODEL) : 'gemini-2.5-flash-lite');
+console.log(`[IA] Gemma : ${GEMMA_MODELE} | Gemini (commande dédiée) : ${IA_GEMINI_MODELE}`);
 const GEMINI_REFLEXION = Number.isFinite(parseInt(process.env.GEMINI_REFLEXION, 10)) ? Math.max(0, parseInt(process.env.GEMINI_REFLEXION, 10)) : 1024;
 const GEMINI_RECHERCHE = (process.env.GEMINI_RECHERCHE || 'on').trim().toLowerCase() !== 'off';
 const GEMINI_RPM = Math.max(1, parseInt(process.env.GEMINI_RPM, 10) || 4);
+const GEMMA_RPM = Math.max(1, parseInt(process.env.GEMMA_RPM, 10) || GEMINI_RPM);
+const IA_GEMINI_RPM = Math.max(1, parseInt(process.env.IA_GEMINI_RPM, 10) || GEMINI_RPM);
 const GEMINI_PAUSE_MS = 4000;                 // délai minimum entre deux questions d'une même personne
 const GEMINI_MAX_MESSAGES = 12;               // mémoire de la conversation (6 échanges)
 const GEMINI_OUBLI_MS = 30 * 60 * 1000;       // la conversation est oubliée après 30 min sans message
@@ -2361,7 +2366,7 @@ const GEMINI_IMAGE_MAX = 4 * 1024 * 1024;     // images de 4 Mo maximum
 
 const iaConversations = new Map();            // clé de conversation -> { messages: [{role, texte}], dernier }
 const iaDernierePar = new Map();              // personne -> heure de sa dernière question
-const iaAppels = [];                          // heures des derniers appels à Gemini (limite par minute)
+const iaAppels = { gemma: [], gemini: [] };   // quotas par modèle, indépendants
 
 function consignesIA() {
   const tz = process.env.BOT_TZ || 'Africa/Abidjan';
@@ -2406,35 +2411,50 @@ function texteCite(msg) {
   return (cite?.conversation || cite?.extendedTextMessage?.text || cite?.imageMessage?.caption || cite?.videoMessage?.caption || '').trim();
 }
 
-function attendreQuota() {
+function attendreQuota(modele = GEMMA_MODELE) {
+  const gemma = /^gemma/i.test(modele);
+  const appels = gemma ? iaAppels.gemma : iaAppels.gemini;
+  const limite = gemma ? GEMMA_RPM : IA_GEMINI_RPM;
   const t = Date.now();
-  while (iaAppels.length && t - iaAppels[0] > 60000) iaAppels.shift();
-  if (iaAppels.length >= GEMINI_RPM) return Math.ceil((60000 - (t - iaAppels[0])) / 1000);
+  while (appels.length && t - appels[0] > 60000) appels.shift();
+  if (appels.length >= limite) return Math.ceil((60000 - (t - appels[0])) / 1000);
   return 0;
 }
 
-// Appel à Gemini : modèle principal puis modèle de secours, avec ou sans recherche Google
+// Appel à un modèle précis : Gemma par défaut, Gemini uniquement sur demande explicite.
 async function appelerGemini(contents, opts = {}) {
+  const modele = opts.modeleForce || GEMMA_MODELE;
   const essais = [];
-  for (const modele of GEMINI_MODELES) {
-    if (GEMINI_RECHERCHE && !opts.sansRecherche) essais.push({ modele, recherche: true });
-    essais.push({ modele, recherche: false });
-  }
+  if (GEMINI_RECHERCHE && !opts.sansRecherche && !/^gemma/i.test(modele)) essais.push({ modele, recherche: true });
+  essais.push({ modele, recherche: false });
   let erreur = 'inconnue';
+  let detail = '';
   for (const { modele, recherche } of essais.slice(0, 3)) {
-    iaAppels.push(Date.now());
-    compterAppelJour();
-    const corps = {
-      systemInstruction: { parts: [{ text: opts.consignes || consignesIA() }] },
-      contents,
-      generationConfig: {
-        temperature: opts.temperature !== undefined ? opts.temperature : 0.7,
-        topP: 0.95,
-        maxOutputTokens: opts.maxTokens || (2048 + GEMINI_REFLEXION),
-        thinkingConfig: { thinkingBudget: opts.reflexion !== undefined ? opts.reflexion : GEMINI_REFLEXION }
-      }
-    };
-    if (recherche) corps.tools = [{ google_search: {} }];
+    (estGemma ? iaAppels.gemma : iaAppels.gemini).push(Date.now());
+    if (opts.compterQuotaJour) compterAppelJour();
+    const consignes = opts.consignes || consignesIA();
+    const estGemma = /^gemma/i.test(modele);
+    const temperature = opts.temperature !== undefined ? opts.temperature : 0.7;
+    let corps;
+    if (estGemma) {
+      // Les modèles Gemma n'acceptent ni « instructions système », ni réflexion, ni recherche Google : on met les consignes en tête du 1er message.
+      const contenuG = contents.map((c, i) => (i === 0 && c.role === 'user')
+        ? { ...c, parts: [{ text: consignes + '\n\n--- Message de la personne ---\n' + ((c.parts && c.parts[0] && c.parts[0].text) || '') }, ...((c.parts || []).slice(1))] }
+        : c);
+      corps = { contents: contenuG, generationConfig: { temperature, topP: 0.95, maxOutputTokens: opts.maxTokens || 2048 } };
+    } else {
+      corps = {
+        systemInstruction: { parts: [{ text: consignes }] },
+        contents,
+        generationConfig: {
+          temperature,
+          topP: 0.95,
+          maxOutputTokens: opts.maxTokens || (2048 + GEMINI_REFLEXION),
+          thinkingConfig: { thinkingBudget: opts.reflexion !== undefined ? opts.reflexion : GEMINI_REFLEXION }
+        }
+      };
+      if (recherche) corps.tools = [{ google_search: {} }];
+    }
     let r;
     try {
       r = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/${modele}:generateContent`, corps, {
@@ -2443,7 +2463,7 @@ async function appelerGemini(contents, opts = {}) {
         validateStatus: () => true
       });
     } catch (e) {
-      erreur = 'reseau';
+      erreur = 'reseau'; detail = e && e.code ? String(e.code) : 'réseau';
       console.error(`[IA] ❌ ${modele} : ${e && e.code ? e.code : 'erreur réseau'}`);
       continue;
     }
@@ -2453,7 +2473,7 @@ async function appelerGemini(contents, opts = {}) {
       const texte = (cand?.content?.parts || []).filter(p => p.text && !p.thought).map(p => p.text).join('').trim();
       if (!texte) {
         if (bloque) return { bloque: true };
-        erreur = 'vide';
+        erreur = 'vide'; detail = 'réponse vide';
         console.error(`[IA] ⚠️ ${modele} : réponse vide (${cand?.finishReason || 'sans motif'})`);
         continue;
       }
@@ -2462,15 +2482,18 @@ async function appelerGemini(contents, opts = {}) {
     const message = String(r.data?.error?.message || '').slice(0, 160);
     console.error(`[IA] ❌ ${modele} (${recherche ? 'avec' : 'sans'} recherche) : HTTP ${r.status} ${message}`);
     if (r.status === 401 || r.status === 403 || (r.status === 400 && /api key|API_KEY/i.test(message))) return { erreurCle: true };
-    erreur = r.status === 429 ? 'quota' : 'erreur';
+    erreur = r.status === 429 ? 'quota' : 'erreur'; detail = `HTTP ${r.status} (${modele})`;
     if (r.status >= 500) await new Promise(res => setTimeout(res, 1500));
   }
-  return { erreur };
+  return { erreur, detail };
 }
 
 async function commandeIA(sock, msg, remoteJid, cleanText, senderJid, isGroup) {
   const rep = (texte) => envoyerAvecDelai(sock, remoteJid, { text: texte }, { quoted: msg }, 'texte');
-  let q = cleanText.replace(/^\.(ia|gemini)\s*/i, '').trim();
+  let q = cleanText.replace(/^\.ia\s*/i, '').trim();
+  // La commande .ia utilise toujours Gemini ; le mot « Gemini » après .ia reste accepté.
+  if (/^gemini(?:\s|$)/i.test(q)) q = q.replace(/^gemini\s*/i, '').trim();
+  const modeleDemande = IA_GEMINI_MODELE;
   const cleConv = isGroup ? `${remoteJid}|${senderJid}` : remoteJid;
 
   if (/^(reset|nouveau|new|effacer|clear)$/i.test(q)) {
@@ -2480,7 +2503,7 @@ async function commandeIA(sock, msg, remoteJid, cleanText, senderJid, isGroup) {
   const image = imageDuMessage(msg);
   const cite = texteCite(msg);
   if (!q && !image && !cite || /^(aide|help|\?)$/i.test(q)) {
-    return rep("🤖 *IA Gemini*\n\n• *.ia [question]* : pose-moi n'importe quoi\n• envoie une *photo* avec *.ia décris-la* : je l'analyse\n• réponds à un message avec *.ia* : je l'explique ou je le résume\n• *.ia reset* : nouvelle conversation\n\n_Je me souviens de nos derniers échanges pendant 30 minutes._");
+    return rep("🤖 *IA Gemini 2.5 Flash Lite*\n\n• *.ia [question]* : discuter avec Gemini\n• envoie une *photo* avec *.ia décris-la* : analyse avec Gemini\n• *.ia reset* : nouvelle conversation\n\n_Le mode Auto, lui, utilise Gemma._\n_Je me souviens de nos derniers échanges pendant 30 minutes._");
   }
   if (!GEMINI_CLE) {
     return rep("⚠️ L'IA n'est pas encore activée : il manque la variable *GEMINI_API_KEY* sur Render.");
@@ -2489,7 +2512,7 @@ async function commandeIA(sock, msg, remoteJid, cleanText, senderJid, isGroup) {
 
   const t = Date.now();
   if (t - (iaDernierePar.get(senderJid) || 0) < GEMINI_PAUSE_MS) return rep("⏳ Doucement, laisse-moi finir la question précédente 😅");
-  const attente = attendreQuota();
+  const attente = attendreQuota(IA_GEMINI_MODELE);
   if (attente > 0) return rep(`⏳ L'IA est très sollicitée en ce moment, réessaie dans ${attente} s.`);
   iaDernierePar.set(senderJid, t);
   if (iaDernierePar.size > 500) iaDernierePar.clear();
@@ -2515,7 +2538,7 @@ async function commandeIA(sock, msg, remoteJid, cleanText, senderJid, isGroup) {
       }
     }
     const contents = [...conv.messages.map(m => ({ role: m.role, parts: [{ text: m.texte }] })), { role: 'user', parts }];
-    const res = await appelerGemini(contents);
+    const res = await appelerGemini(contents, { modeleForce: modeleDemande });
 
     if (res.erreurCle) return rep("⚠️ La clé Gemini est refusée. Vérifie *GEMINI_API_KEY* sur Render (clé copiée en entier, sans espace).");
     if (res.bloque) return rep("🚫 Je ne peux pas répondre à ça. Reformule ta demande autrement.");
@@ -2523,7 +2546,7 @@ async function commandeIA(sock, msg, remoteJid, cleanText, senderJid, isGroup) {
       iaDernierePar.delete(senderJid);
       return rep(res.erreur === 'quota'
         ? "⏳ L'IA a atteint sa limite gratuite pour le moment. Réessaie dans quelques minutes."
-        : "😕 L'IA n'a pas pu répondre. Réessaie dans un instant.");
+        : `😕 L'IA n'a pas pu répondre${res.detail ? ' [' + res.detail + ']' : ''}. Réessaie dans un instant.`);
     }
 
     conv.messages.push({ role: 'user', texte: image ? `[image] ${question}` : question }, { role: 'model', texte: res.texte });
@@ -2543,7 +2566,7 @@ async function commandeIA(sock, msg, remoteJid, cleanText, senderJid, isGroup) {
 // 🤖 MODE AUTO : l'IA répond à la place du propriétaire (discussions privées uniquement)
 //   .auto  (ou .auto on / .auto mode)  → active
 //   .solo  (ou .solo mode / .auto off) → désactive : le bot redevient muet (mode solo, incognito)
-// Avant d'atteindre la limite de Gemini, le bot dit une fois qu'il est occupé puis passe, sans bruit, en mode solo.
+// Avant d'atteindre la limite de Gemma, le bot dit une fois qu'il est occupé puis passe, sans bruit, en mode solo.
 // Variable Render facultative : GEMINI_LIMITE_JOUR (appels par jour avant de s'arrêter, défaut 200 ; la limite réelle dépend de ta clé).
 // ═══════════════════════════════════════════════════════════
 const IA_AUTO_LIMITE_JOUR = Math.max(10, parseInt(process.env.GEMINI_LIMITE_JOUR, 10) || 200);
@@ -2593,8 +2616,10 @@ function consignesAuto(nom) {
 const iaAutoChats = new Map();
 // Retour au mode solo : muet, sans aucun message. Avec jid = cette discussion seulement ; sans jid = toutes.
 function basculerSolo(raison, jid) {
-  if (jid) { iaAutoChats.delete(jid); iaAutoEnAttente.delete(jid); iaAutoConvs.delete(jid); }
-  else { iaAutoChats.clear(); iaAutoEnAttente.clear(); iaAutoConvs.clear(); }
+  if (jid) {
+    const rec = iaAutoChats.get(jid);
+    for (const a of (rec ? rec.alias : [jid])) { iaAutoChats.delete(a); iaAutoEnAttente.delete(a); iaAutoConvs.delete(a); }
+  } else { iaAutoChats.clear(); iaAutoEnAttente.clear(); iaAutoConvs.clear(); }
   console.log(`[IA-AUTO] 🔕 Mode solo ${jid ? 'pour …' + String(jid).split('@')[0].slice(-4) : 'pour toutes les discussions'} (${raison}).`);
 }
 async function direOccupe(sock, jid) {
@@ -2609,7 +2634,7 @@ const RE_QUESTION_IA = /\b(robot|bot|chatbot|ia|intelligence artificielle|chat ?
 async function repondreIaAuto(sock, msg, jid, question) {
   if (!iaAutoChats.has(jid)) return false;
   if (limiteProche()) { await direOccupe(sock, jid); basculerSolo('limite journalière proche', jid); return false; }
-  const attente = attendreQuota();
+  const attente = attendreQuota(GEMMA_MODELE);
   if (attente > 0) {
     if (attente > 20) { await direOccupe(sock, jid); basculerSolo('limite par minute', jid); return false; }
     await sleep((attente + 1) * 1000);
@@ -2618,17 +2643,24 @@ async function repondreIaAuto(sock, msg, jid, question) {
   for (const [k, v] of iaAutoConvs) if (t - v.dernier > IA_AUTO_OUBLI_MS) iaAutoConvs.delete(k);
   if (iaAutoConvs.size > 300) iaAutoConvs.delete(iaAutoConvs.keys().next().value);
   const conv = iaAutoConvs.get(jid) || { messages: [], dernier: t };
-  try { await sock.readMessages([msg.key]); } catch (e) {}
+  // (volontairement AUCUN readMessages : l'autre personne ne voit jamais de coche bleue de la part du bot)
   const contents = [...conv.messages.map(m => ({ role: m.role, parts: [{ text: m.texte }] })), { role: 'user', parts: [{ text: question }] }];
-  const res = await appelerGemini(contents, { consignes: consignesAuto(msg.pushName), maxTokens: 90, reflexion: 0, sansRecherche: true, temperature: 0.8 });
+  const res = await appelerGemini(contents, { modeleForce: GEMMA_MODELE, consignes: consignesAuto(msg.pushName), maxTokens: 90, reflexion: 0, sansRecherche: true, temperature: 0.8, compterQuotaJour: true });
 
-  if (res.erreurCle) { basculerSolo('clé Gemini refusée'); return false; }
-  if (res.erreur === 'quota') { iaJour.n = IA_AUTO_LIMITE_JOUR; await direOccupe(sock, jid); basculerSolo('limite Gemini atteinte', jid); return false; }
-  if (!res.texte) { console.log(`[IA-AUTO] pas de réponse (${res.bloque ? 'bloqué' : (res.erreur || 'vide')}), silence.`); return true; }
+  if (res.erreurCle) { basculerSolo('clé API refusée'); return false; }
+  if (res.erreur === 'quota') { iaJour.n = IA_AUTO_LIMITE_JOUR; await direOccupe(sock, jid); basculerSolo('limite Gemma atteinte', jid); return false; }
+  if (!res.texte) {
+    console.log(`[IA-AUTO] pas de réponse (${res.bloque ? 'bloqué' : (res.erreur || 'vide')} ${res.detail || ''}), silence.`);
+    if (!res.bloque && Date.now() - (globalThis.__alerteIaAuto || 0) > 300000) {
+      globalThis.__alerteIaAuto = Date.now();
+      await direAMoi(sock, `⚠️ Mode auto : Gemma n'a pas répondu${res.detail ? ' [' + res.detail + ']' : ''}. Cette personne n'a reçu aucune réponse.`);
+    }
+    return true;
+  }
 
   let reponse = res.texte.replace(/[*_`#>]/g, '').replace(/\s*\n+\s*/g, ' ').replace(/^["«»“”\s]+|["«»“”\s]+$/g, '').trim();
   const phrases = reponse.match(/[^.!?…]+[.!?…]*/g) || [reponse];
-  reponse = phrases.slice(0, 2).join(' ').trim();                       // jamais plus de deux phrases
+  reponse = phrases.slice(0, 2).join(' ').replace(/\s+/g, ' ').trim();   // jamais plus de deux phrases
   if (reponse.length > 180) reponse = reponse.slice(0, 180).replace(/\s+\S*$/, '');
   if (!reponse) return true;
   // Une formulation de type IA qui s'échappe : on se tait plutôt que de se trahir (sauf si on nous a posé la question)
@@ -2689,8 +2721,11 @@ async function direAMoi(sock, texte) {
   } catch (e) {}
 }
 async function activerModeAuto(sock, jid, alt) {
-  iaAutoChats.set(jid, { depuis: Date.now() });
-  iaAutoConvs.delete(jid); iaAutoEnAttente.delete(jid);
+  // WhatsApp désigne parfois la même personne par son numéro, parfois par un identifiant interne (LID) : on retient les deux.
+  const rec = { depuis: Date.now(), alias: new Set() };
+  let tel = null;
+  try { tel = await numeroReel(sock, jid, alt); } catch (e) {}
+  for (const a of [jid, alt, tel]) if (a) { rec.alias.add(a); iaAutoChats.set(a, rec); iaAutoConvs.delete(a); iaAutoEnAttente.delete(a); }
   let qui = '';
   try { const idp = await identitePersonne(sock, jid, null, alt); qui = `${idp.nom} (${idp.numero})`; } catch (e) { qui = 'cette personne'; }
   console.log('[IA-AUTO] ▶️ Mode auto activé pour une discussion.');
@@ -3442,6 +3477,14 @@ async function startBot() {
       const aAccesAdmin = isFromBot; // le mot de passe privé ne donne jamais les droits d'administration.
 
       // 🤖 Mode auto (par discussion) : l'IA répond à ta place dans les discussions choisies, même en mode privé.
+      if (!isFromBot && iaAutoChats.size && !iaAutoChats.has(remoteJid)) {   // même personne, autre identifiant (numéro ↔ LID)
+        try {
+          const altRecu = msg.key.remoteJidAlt || msg.key.senderPn;
+          const tel = await numeroReel(sock, remoteJid, altRecu);
+          const rec = [altRecu, tel].map(x => x && iaAutoChats.get(x)).find(Boolean);
+          if (rec) { rec.alias.add(remoteJid); iaAutoChats.set(remoteJid, rec); }
+        } catch (e) {}
+      }
       if (!isFromBot && iaAutoChats.has(remoteJid) && !estCommandeReconnue(lowerText)) {
         const recent = !timestamp || Date.now() - timestamp < 120000;
         const texteAuto = (cleanText || '').trim();
@@ -3583,7 +3626,7 @@ async function startBot() {
         }
       }
 
-      if (/^\.(ia|gemini)(\s|$)/.test(lowerText)) {
+      if (/^\.ia(\s|$)/.test(lowerText)) {
         await commandeIA(sock, msg, remoteJid, cleanText, senderJid, isGroup);
         return;
       }
