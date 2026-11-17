@@ -63,7 +63,7 @@ process.on('message', async (commande) => {
       processedMessages.clear();
       contactsConnus.clear(); groupesConnus.clear(); lidVersNumero.clear();
       dernieresCommandes.clear(); demandesYasmine.clear(); vuDejaVus.clear();
-      AUDIO_VOCAL_CACHE.clear(); messagesSupprimes.clear(); mesEnvois.clear();
+      AUDIO_VOCAL_CACHE.clear(); messagesSupprimes.clear();
       motDePasseDepuis.clear(); DEMANDES_MARIAGE.clear(); draguesEnCours.clear();
       iaConversations.clear(); iaDernierePar.clear(); gumballEnAttente.clear();
       DERNIER_ACCUEIL.clear();
@@ -138,7 +138,8 @@ process.on('message', async (commande) => {
         sleep(20000).then(() => { throw new Error('WhatsApp n’a pas confirmé l’envoi (délai dépassé).'); })
       ]);
       if (envoye && envoye.key && envoye.key.id) {
-        memoriserMonEnvoi(jid, envoye.key);
+        lierChat(envoye.key.remoteJid || jid, jid);
+        memoriserMonEnvoi(envoye.key.remoteJid || jid, envoye.key);
         // Les messages ordinaires envoyés manuellement ne doivent pas être interprétés
         // comme des commandes/réponses par le bot ; une vraie commande reste exécutable.
         if (!estCmd) processedMessages.add(envoye.key.id);
@@ -190,8 +191,39 @@ const REGEX_PRESENTATION = /^\.pr[ée]sentation\s*([1-6])$/i;
 // 🎙️ Commandes qui répondent par un vocal : le bot affiche « enregistre un audio… » au lieu de « écrit… »
 const estCommandeVocale = (t) => {
   const x = (t || '').trim().toLowerCase();
-  return /^\.(rire|sad|melodie|peur\??)$/.test(x) || REGEX_PRESENTATION.test(x) || /^\.voc(-f)?(\s|$)/.test(x);
+  return /^\.(rire|sad|melodie|gta|peur\??)$/.test(x) || REGEX_PRESENTATION.test(x) || /^\.voc(-f)?(\s|$)/.test(x);
 };
+
+// 🎭 Commandes CACHÉES (propriétaire uniquement, absentes du menu) : simulent une présence pendant x secondes
+//   .vocs x → « enregistre un audio… » · .mes x → « écrit… » · .duo x → les deux en alternance (1 s chacun)
+//   Sans nombre : 5 s. Maximum : 120 s. « .vocs 0 » (ou une nouvelle commande) arrête la simulation en cours.
+const REGEX_SIMULATION = /^\.(vocs|mes|duo)(?:\s+(\d{1,3}))?$/i;
+const SIMULATION_MAX_S = 120;
+const simulationsPresence = new Map();   // jid -> jeton (une seule simulation par discussion)
+async function simulerPresence(sock, jid, mode, secondes) {
+  const jeton = Symbol('simulation');
+  simulationsPresence.set(jid, jeton);
+  const actif = () => simulationsPresence.get(jid) === jeton;
+  const envoyer = async (etat) => { try { await sock.sendPresenceUpdate(etat, jid); } catch (e) {} };
+  arreterComposing(sock, jid);   // coupe un éventuel « écrit… » déjà en cours
+  const fin = Date.now() + secondes * 1000;
+  let dernierEnLigne = 0;
+  try {
+    let etat = mode === 'vocs' ? 'recording' : 'composing';
+    while (actif() && Date.now() < fin) {
+      if (Date.now() - dernierEnLigne > 20000) { dernierEnLigne = Date.now(); await passerEnLigne(sock); }
+      await envoyer(etat);
+      if (mode === 'duo') {
+        await sleep(Math.max(0, Math.min(1000, fin - Date.now())));
+        etat = etat === 'composing' ? 'recording' : 'composing';
+      } else {
+        await sleep(Math.max(0, Math.min(4000, fin - Date.now())));   // WhatsApp éteint l'état tout seul : on le relance
+      }
+    }
+  } finally {
+    if (actif()) { simulationsPresence.delete(jid); await envoyer('paused'); }
+  }
+}
 
 // 📝 ═══════════════════════════════════════════════════════════
 // JOURNAL DES MESSAGES : qui écrit, où (contact ou groupe), quel type, quel contenu
@@ -1323,13 +1355,64 @@ function sansCitationSupprimee(options) {
 
 // 📒 Mes messages envoyés, par discussion (pour la commande .del)
 const mesEnvois = new Map();
+// Un même chat peut avoir deux identifiants (numéro @s.whatsapp.net et @lid) : on les range sous la même clé.
+const aliasChat = new Map();
+const cleChat = (jid) => aliasChat.get(jid) || jid;
+function lierChat(principal, alt) {
+  if (!principal || !alt || principal === alt) return;
+  const cp = cleChat(principal);
+  aliasChat.set(alt, cp);
+  // si des messages avaient déjà été rangés sous l'autre identifiant, on les fusionne
+  const ancien = mesEnvois.get(alt);
+  if (ancien && ancien.length) {
+    const cible = mesEnvois.get(cp) || [];
+    for (const k of ancien) if (!cible.some(x => x.id === k.id)) cible.push(k);
+    cible.sort((a, b) => (a.t || 0) - (b.t || 0));
+    mesEnvois.set(cp, cible);
+    mesEnvois.delete(alt);
+    sauverMesEnvois();
+  }
+}
+// 💾 Sauvegarde dans le dossier de session de CE bot : la liste survit aux redémarrages (pas aux redéploiements sans disque persistant)
+const FICHIER_ENVOIS = path.join(AUTH_DIR, 'mes-envois.json');
+const DUREE_ENVOIS_MS = 3 * 24 * 3600 * 1000;
+let envoisTimer = null;
+function sauverMesEnvois() {
+  if (envoisTimer) return;
+  envoisTimer = setTimeout(() => {
+    envoisTimer = null;
+    try {
+      const obj = {};
+      const limite = Date.now() - DUREE_ENVOIS_MS;
+      for (const [cle, liste] of mesEnvois) {
+        const recents = liste.filter(k => (k.t || 0) >= limite);
+        if (recents.length) obj[cle] = recents;
+      }
+      fs.mkdirSync(AUTH_DIR, { recursive: true });
+      fs.writeFileSync(FICHIER_ENVOIS, JSON.stringify({ alias: Object.fromEntries(aliasChat), envois: obj }));
+    } catch (e) {}
+  }, 2000);
+}
+try {
+  if (fs.existsSync(FICHIER_ENVOIS)) {
+    const brut = JSON.parse(fs.readFileSync(FICHIER_ENVOIS, 'utf8'));
+    const limite = Date.now() - DUREE_ENVOIS_MS;
+    for (const [a, b] of Object.entries(brut.alias || {})) aliasChat.set(a, b);
+    for (const [cle, liste] of Object.entries(brut.envois || {})) {
+      const recents = (liste || []).filter(k => k && k.id && (k.t || 0) >= limite);
+      if (recents.length) mesEnvois.set(cle, recents);
+    }
+  }
+} catch (e) {}
 function memoriserMonEnvoi(jid, key) {
   if (!jid || !key || !key.id) return;
-  const liste = mesEnvois.get(jid) || [];
+  const cle = cleChat(jid);
+  const liste = mesEnvois.get(cle) || [];
   if (liste.some(k => k.id === key.id)) return;
   liste.push({ remoteJid: jid, fromMe: true, id: key.id, t: Date.now() });
   if (liste.length > 300) liste.shift();
-  mesEnvois.set(jid, liste);
+  mesEnvois.set(cle, liste);
+  sauverMesEnvois();
 }
 
 // 🔑 Discussion -> heure à laquelle quelqu'un a trouvé le mot de passe privé (sert à limiter .del)
@@ -1339,13 +1422,15 @@ const motDePasseDepuis = new Map();
 //   - propriétaire : tous les messages mémorisés
 //   - personne ayant trouvé le mot de passe : seulement ceux envoyés depuis qu'elle l'a trouvé (depuis = timestamp)
 async function commandeDel(sock, remoteJid, depuis = 0) {
-  const toutes = mesEnvois.get(remoteJid) || [];
+  const cle = cleChat(remoteJid);
+  const toutes = mesEnvois.get(cle) || [];
   const liste = toutes.filter(k => !messagesSupprimes.has(k.id) && (!depuis || (k.t || 0) >= depuis));
   const ids = new Set(liste.map(k => k.id));
-  mesEnvois.set(remoteJid, toutes.filter(k => !ids.has(k.id)));
+  mesEnvois.set(cle, toutes.filter(k => !ids.has(k.id)));
+  sauverMesEnvois();
   let reussis = 0;
   for (const k of liste) {
-    try { await sock.sendMessage(remoteJid, { delete: { remoteJid: k.remoteJid, fromMe: true, id: k.id } }); reussis++; } catch (e) {}
+    try { await sock.sendMessage(remoteJid, { delete: { remoteJid: remoteJid, fromMe: true, id: k.id } }); reussis++; } catch (e) {}
     await sleep(400);
   }
   console.log(`[DEL] 🗑️ ${reussis}/${liste.length} message(s) supprimé(s) dans ${remoteJid}${depuis ? ' (depuis le mot de passe)' : ''}`);
@@ -1497,6 +1582,7 @@ const CATEGORIES_MENU = [
       { groupe: '📸 Médias', noms: ['.rire'], exact: true, desc: 'Envoyer rire.mp3 sous forme de vocal' },
       { groupe: '📸 Médias', noms: ['.sad'], exact: true, desc: 'Envoyer sad.mp3 sous forme de vocal' },
       { groupe: '📸 Médias', noms: ['.peur?'], exact: true, desc: 'Envoyer peur.mp3 sous forme de vocal' },
+      { groupe: '📸 Médias', noms: ['.gta'], exact: true, desc: 'Envoyer gta.mp3 sous forme de vocal' },
       { groupe: '📸 Médias', noms: ['.presentation'], aff: '.présentation', args: '[1-6]', test: (t) => REGEX_PRESENTATION.test(t), desc: 'Envoyer la présentation n°1 à 6 en vocal' },
       { groupe: '📸 Médias', noms: ['.pp', '.p'], aff: '.pp', args: '[@mention]', desc: "Photo de profil (groupe & privé)" },
       { groupe: '📸 Médias', noms: ['pipi'], args: '[@mention]', desc: "Photo de profil (pipi, groupe & privé)" },
@@ -3356,7 +3442,10 @@ async function startBot() {
           setImmediate(() => sock.ev.emit('messages.upsert', { ...m, messages: [suivant] }));
         }
       }
-      if (msg.key && msg.key.fromMe && !msg.message.protocolMessage) memoriserMonEnvoi(msg.key.remoteJid, msg.key);
+      if (msg.key && msg.key.fromMe && !msg.message.protocolMessage) {
+        lierChat(msg.key.remoteJid, msg.key.remoteJidAlt);
+        memoriserMonEnvoi(msg.key.remoteJid, msg.key);
+      }
 
       if (msg.key.fromMe && processedMessages.has(msg.key.id)) return;
 
@@ -3563,6 +3652,15 @@ async function startBot() {
       if (/^\.askwedding(\s|$)/.test(lowerText)) { await commandeAskWedding(sock, msg, remoteJid, acteurDe(msg, sock, remoteJid, senderJid)); return; }
       if (/^\.routine$/.test(lowerText)) { await commandeRoutine(sock, msg, remoteJid); return; }
       if (lowerText.trim() === '.ping') { await commandePing(sock, msg, remoteJid); return; }
+      if (isFromBot) {   // 🎭 commandes cachées : .vocs / .mes / .duo [secondes]
+        const matchSimulation = lowerText.trim().match(REGEX_SIMULATION);
+        if (matchSimulation) {
+          const mode = matchSimulation[1].toLowerCase();
+          const secondes = Math.min(SIMULATION_MAX_S, matchSimulation[2] === undefined ? 5 : parseInt(matchSimulation[2], 10));
+          simulerPresence(sock, remoteJid, mode, secondes).catch(e => console.error('[SIMULATION]', e && e.message ? e.message : e));
+          return;
+        }
+      }
       if (/^\.del$/.test(lowerText)) {
         if (isFromBot) { await commandeDel(sock, remoteJid); return; }
         // Personne ayant trouvé le mot de passe : le bot efface SES propres messages, uniquement ceux envoyés depuis ce moment-là.
@@ -3741,6 +3839,15 @@ async function startBot() {
         catch (e) {
           console.error('[AUDIO] .sad :', e && e.message ? e.message : e);
           await envoyerAvecDelai(sock, remoteJid, { text: "⚠️ Je n'ai pas réussi à préparer le vocal. Vérifie que FFmpeg est disponible sur Render et que `media/sad.mp3` est bien présent." }, { quoted: msg }, 'texte');
+        }
+        return;
+      }
+
+      if (lowerText.trim() === '.gta') {
+        try { await envoyerFichierEnVocal(sock, msg, remoteJid, 'gta.mp3'); }
+        catch (e) {
+          console.error('[AUDIO] .gta :', e && e.message ? e.message : e);
+          await envoyerAvecDelai(sock, remoteJid, { text: "⚠️ Je n'ai pas réussi à préparer le vocal. Vérifie que FFmpeg est disponible sur Render et que `media/gta.mp3` est bien présent." }, { quoted: msg }, 'texte');
         }
         return;
       }
