@@ -204,24 +204,44 @@ async function simulerPresence(sock, jid, mode, secondes) {
   const jeton = Symbol('simulation');
   simulationsPresence.set(jid, jeton);
   const actif = () => simulationsPresence.get(jid) === jeton;
-  const envoyer = async (etat) => { try { await sock.sendPresenceUpdate(etat, jid); } catch (e) {} };
+  let envois = 0, erreurs = 0;
+  const envoyer = async (etat) => {
+    try { await sock.sendPresenceUpdate(etat, jid); envois++; }
+    catch (e) { if (++erreurs <= 3) console.error(`[SIMULATION] ⚠️ présence « ${etat} » refusée :`, e && e.message ? e.message : e); }
+  };
   arreterComposing(sock, jid);   // coupe un éventuel « écrit… » déjà en cours
-  const fin = Date.now() + secondes * 1000;
+  await sleep(1500);             // ton téléphone envoie lui-même un « paused » juste après ta commande : on passe après lui
+  const debut = Date.now();
+  const fin = debut + secondes * 1000;
   let dernierEnLigne = 0;
+  const enLigne = async () => { if (Date.now() - dernierEnLigne > 20000) { dernierEnLigne = Date.now(); await passerEnLigne(sock); } };
+  console.log(`[SIMULATION] ▶️ ${mode} ${secondes}s dans ${jid}`);
   try {
-    let etat = mode === 'vocs' ? 'recording' : 'composing';
-    while (actif() && Date.now() < fin) {
-      if (Date.now() - dernierEnLigne > 20000) { dernierEnLigne = Date.now(); await passerEnLigne(sock); }
-      await envoyer(etat);
-      if (mode === 'duo') {
-        await sleep(Math.max(0, Math.min(1000, fin - Date.now())));
-        etat = etat === 'composing' ? 'recording' : 'composing';
-      } else {
+    if (mode === 'duo') {
+      // 1 s « écrit… », 1 s « enregistre un audio… », en alternance, calé sur l'horloge (pas de dérive) jusqu'à la fin
+      let etape = 0;
+      while (actif() && Date.now() < fin) {
+        await enLigne();
+        const etat = etape % 2 === 0 ? 'composing' : 'recording';
+        const prochaine = Math.min(fin, debut + (etape + 1) * 1000);
+        await envoyer(etat);
+        await sleep(Math.max(0, (prochaine - Date.now()) / 2));
+        if (actif() && Date.now() < prochaine) await envoyer(etat);   // rafraîchissement à mi-parcours
+        await sleep(Math.max(0, prochaine - Date.now()));
+        etape++;
+      }
+    } else {
+      const etat = mode === 'vocs' ? 'recording' : 'composing';
+      while (actif() && Date.now() < fin) {
+        await enLigne();
+        await envoyer(etat);
         await sleep(Math.max(0, Math.min(4000, fin - Date.now())));   // WhatsApp éteint l'état tout seul : on le relance
       }
     }
   } finally {
-    if (actif()) { simulationsPresence.delete(jid); await envoyer('paused'); }
+    const remplacee = !actif();
+    if (!remplacee) { simulationsPresence.delete(jid); await envoyer('paused'); }
+    console.log(`[SIMULATION] ⏹️ ${mode} fini après ${Math.round((Date.now() - debut) / 1000)}s sur ${secondes}s (${envois} envois${remplacee ? ', remplacée par une autre commande' : ''})`);
   }
 }
 
